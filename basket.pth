@@ -16,6 +16,7 @@ packages/pylint
 packages/python-ldap
 packages/pytz
 packages/setuptools
+packages/suds
 packages/werkzeug
 src/check
 src/commonware
