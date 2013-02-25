@@ -40,7 +40,9 @@ src/django-multidb-router
 src/django-nose
 src/django-piston
 src/django-queryset-transform
+src/django-statsd
 src/jingo
 src/schematic
 src/test-utils
 src/tower
+src/pystatsd

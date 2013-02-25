@@ -43,3 +43,9 @@
 [submodule "src/tower"]
 	path = src/tower
 	url = git://github.com/clouserw/tower.git
+[submodule "src/django-statsd"]
+	path = src/django-statsd
+	url = git://github.com/andymckay/django-statsd.git
+[submodule "src/pystatsd"]
+	path = src/pystatsd
+	url = git://github.com/jsocol/pystatsd.git
