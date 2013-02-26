@@ -12,25 +12,27 @@ from __future__ import absolute_import
 # Imports
 #
 
-import os
-import sys
-import errno
-import threading
-import Queue
-import itertools
 import collections
-import time
-import signal
-import warnings
+import errno
+import itertools
 import logging
+import os
+import signal
+import sys
+import threading
+import time
+import Queue
+import warnings
 
-from multiprocessing import Process, cpu_count, TimeoutError
+from multiprocessing import cpu_count, TimeoutError, Event
 from multiprocessing import util
 from multiprocessing.util import Finalize, debug
 
 from celery.datastructures import ExceptionInfo
 from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 from celery.exceptions import WorkerLostError
+
+from .process import Process
 
 _Semaphore = threading._Semaphore
 
@@ -66,6 +68,15 @@ def mapstar(args):
 def error(msg, *args, **kwargs):
     if util._logger:
         util._logger.error(msg, *args, **kwargs)
+
+
+def safe_apply_callback(fun, *args):
+    if fun:
+        try:
+            fun(*args)
+        except BaseException, exc:
+            error("Pool callback raised exception: %r", exc,
+                  exc_info=True)
 
 
 class LaxBoundedSemaphore(threading._Semaphore):
@@ -134,7 +145,8 @@ def soft_timeout_sighandler(signum, frame):
 #
 
 
-def worker(inqueue, outqueue, initializer=None, initargs=(), maxtasks=None):
+def worker(inqueue, outqueue, initializer=None, initargs=(),
+           maxtasks=None, sentinel=None):
     # Re-init logging system.
     # Workaround for http://bugs.python.org/issue6721#msg140215
     # Python logging module uses RLock() objects which are broken after
@@ -177,6 +189,10 @@ def worker(inqueue, outqueue, initializer=None, initargs=(), maxtasks=None):
 
     completed = 0
     while maxtasks is None or (maxtasks and completed < maxtasks):
+        if sentinel is not None and sentinel.is_set():
+            debug('worker got sentinel -- exiting')
+            break
+
         try:
             ready, task = poll(1.0)
             if not ready:
@@ -223,7 +239,7 @@ class PoolThread(threading.Thread):
             return self.body()
         except Exception, exc:
             error("Thread %r crashed: %r" % (self.__class__.__name__, exc, ),
-                  exc_info=sys.exc_info())
+                  exc_info=True)
             os._exit(1)
 
     def terminate(self):
@@ -385,7 +401,7 @@ class TimeoutHandler(PoolThread):
                 elif i not in dirty and _timed_out(ack_time, soft_timeout):
                     _on_soft_timeout(job, i, soft_timeout)
 
-            time.sleep(0.5)                     # Don't waste CPU cycles.
+            time.sleep(1.0)                     # Don't waste CPU cycles.
 
         debug('timeout handler exiting')
 
@@ -516,7 +532,8 @@ class Pool(object):
     SoftTimeLimitExceeded = SoftTimeLimitExceeded
 
     def __init__(self, processes=None, initializer=None, initargs=(),
-            maxtasksperchild=None, timeout=None, soft_timeout=None):
+            maxtasksperchild=None, timeout=None, soft_timeout=None,
+            force_execv=False):
         self._setup_queues()
         self._taskqueue = Queue.Queue()
         self._cache = {}
@@ -526,6 +543,7 @@ class Pool(object):
         self._maxtasksperchild = maxtasksperchild
         self._initializer = initializer
         self._initargs = initargs
+        self._force_execv = force_execv
 
         if soft_timeout and SIG_SOFT_TIMEOUT is None:
             warnings.warn(UserWarning("Soft timeouts are not supported: "
@@ -543,13 +561,14 @@ class Pool(object):
             raise TypeError('initializer must be a callable')
 
         self._pool = []
+        self._poolctrl = {}
+        self._putlock = LaxBoundedSemaphore(self._processes)
         for i in range(processes):
             self._create_worker_process()
 
         self._worker_handler = self.Supervisor(self)
         self._worker_handler.start()
 
-        self._putlock = LaxBoundedSemaphore(self._processes)
         self._task_handler = self.TaskHandler(self._taskqueue,
                                               self._quick_put,
                                               self._outqueue,
@@ -580,19 +599,23 @@ class Pool(object):
             )
 
     def _create_worker_process(self):
+        sentinel = Event()
         w = self.Process(
+            force_execv=self._force_execv,
             target=worker,
             args=(self._inqueue, self._outqueue,
                     self._initializer, self._initargs,
-                    self._maxtasksperchild),
+                    self._maxtasksperchild,
+                    sentinel),
             )
         self._pool.append(w)
         w.name = w.name.replace('Process', 'PoolWorker')
         w.daemon = True
         w.start()
+        self._poolctrl[w.pid] = sentinel
         return w
 
-    def _join_exited_workers(self, shutdown=False, lost_worker_timeout=10.0):
+    def _join_exited_workers(self, shutdown=False):
         """Cleanup after any worker processes which have exited due to
         reaching their specified lifetime. Returns True if any workers were
         cleaned up.
@@ -600,11 +623,12 @@ class Pool(object):
         now = None
         # The worker may have published a result before being terminated,
         # but we have no way to accurately tell if it did.  So we wait for
-        # 10 seconds before we mark the job with WorkerLostError.
+        # _lost_worker_timeout seconds before we mark the job with
+        # WorkerLostError.
         for job in [job for job in self._cache.values()
                 if not job.ready() and job._worker_lost]:
             now = now or time.time()
-            if now - job._worker_lost > lost_worker_timeout:
+            if now - job._worker_lost > job._lost_worker_timeout:
                 exc_info = None
                 try:
                     raise WorkerLostError("Worker exited prematurely.")
@@ -625,6 +649,7 @@ class Pool(object):
                 debug('Supervisor: worked %d joined' % i)
                 cleaned.append(worker.pid)
                 del self._pool[i]
+                del self._poolctrl[worker.pid]
         if cleaned:
             for job in self._cache.values():
                 for worker_pid in job.worker_pids():
@@ -730,39 +755,44 @@ class Pool(object):
         assert self._state == RUN
         return self.map_async(func, iterable, chunksize).get()
 
-    def imap(self, func, iterable, chunksize=1):
+    def imap(self, func, iterable, chunksize=1, lost_worker_timeout=10.0):
         '''
         Equivalent of `itertools.imap()` -- can be MUCH slower
         than `Pool.map()`
         '''
         assert self._state == RUN
         if chunksize == 1:
-            result = IMapIterator(self._cache)
+            result = IMapIterator(self._cache,
+                                  lost_worker_timeout=lost_worker_timeout)
             self._taskqueue.put((((result._job, i, func, (x,), {})
                          for i, x in enumerate(iterable)), result._set_length))
             return result
         else:
             assert chunksize > 1
             task_batches = Pool._get_tasks(func, iterable, chunksize)
-            result = IMapIterator(self._cache)
+            result = IMapIterator(self._cache,
+                                  lost_worker_timeout=lost_worker_timeout)
             self._taskqueue.put((((result._job, i, mapstar, (x,), {})
                      for i, x in enumerate(task_batches)), result._set_length))
             return (item for chunk in result for item in chunk)
 
-    def imap_unordered(self, func, iterable, chunksize=1):
+    def imap_unordered(self, func, iterable, chunksize=1,
+                       lost_worker_timeout=10.0):
         '''
         Like `imap()` method but ordering of results is arbitrary
         '''
         assert self._state == RUN
         if chunksize == 1:
-            result = IMapUnorderedIterator(self._cache)
+            result = IMapUnorderedIterator(self._cache,
+                    lost_worker_timeout=lost_worker_timeout)
             self._taskqueue.put((((result._job, i, func, (x,), {})
                          for i, x in enumerate(iterable)), result._set_length))
             return result
         else:
             assert chunksize > 1
             task_batches = Pool._get_tasks(func, iterable, chunksize)
-            result = IMapUnorderedIterator(self._cache)
+            result = IMapUnorderedIterator(self._cache,
+                    lost_worker_timeout=lost_worker_timeout)
             self._taskqueue.put((((result._job, i, mapstar, (x,), {})
                      for i, x in enumerate(task_batches)), result._set_length))
             return (item for chunk in result for item in chunk)
@@ -791,11 +821,8 @@ class Pool(object):
             warnings.warn(UserWarning("Soft timeouts are not supported: "
                     "on this platform: It does not have the SIGUSR1 signal."))
             soft_timeout = None
-        if waitforslot and self._putlock is not None:
-            while 1:
-                if self._state != RUN or self._putlock.acquire(False):
-                    break
-                time.sleep(1.0)
+        if waitforslot and self._putlock is not None and self._state == RUN:
+            self._putlock.acquire()
         if self._state == RUN:
             result = ApplyResult(self._cache, callback,
                                  accept_callback, timeout_callback,
@@ -871,6 +898,10 @@ class Pool(object):
             debug('joining worker %s/%s (%r)' % (i, len(self._pool), p, ))
             p.join()
 
+    def restart(self):
+        for e in self._poolctrl.itervalues():
+            e.set()
+
     @staticmethod
     def _help_stuff_finish(inqueue, task_handler, size):
         # task_handler may be blocked trying to put items on inqueue
@@ -939,7 +970,7 @@ class ApplyResult(object):
 
     def __init__(self, cache, callback, accept_callback=None,
             timeout_callback=None, error_callback=None, soft_timeout=None,
-            timeout=None):
+            timeout=None, lost_worker_timeout=10.0):
         self._mutex = threading.Lock()
         self._cond = threading.Condition(threading.Lock())
         self._job = job_counter.next()
@@ -951,6 +982,7 @@ class ApplyResult(object):
         self._timeout_callback = timeout_callback
         self._timeout = timeout
         self._soft_timeout = soft_timeout
+        self._lost_worker_timeout = lost_worker_timeout
 
         self._accepted = False
         self._worker_pid = None
@@ -1002,9 +1034,11 @@ class ApplyResult(object):
 
             # apply callbacks last
             if self._callback and self._success:
-                self._callback(self._value)
+                safe_apply_callback(
+                    self._callback, self._value)
             if self._errback and not self._success:
-                self._errback(self._value)
+                safe_apply_callback(
+                    self._errback, self._value)
         finally:
             self._mutex.release()
 
@@ -1017,7 +1051,8 @@ class ApplyResult(object):
             if self._ready:
                 self._cache.pop(self._job, None)
             if self._accept_callback:
-                self._accept_callback(pid, time_accepted)
+                safe_apply_callback(
+                    self._accept_callback, pid, time_accepted)
         finally:
             self._mutex.release()
 
@@ -1094,15 +1129,19 @@ class MapResult(ApplyResult):
 
 
 class IMapIterator(object):
+    _worker_lost = None
 
-    def __init__(self, cache):
+    def __init__(self, cache, lost_worker_timeout=10.0):
         self._cond = threading.Condition(threading.Lock())
         self._job = job_counter.next()
         self._cache = cache
         self._items = collections.deque()
         self._index = 0
         self._length = None
+        self._ready = False
         self._unsorted = {}
+        self._worker_pids = []
+        self._lost_worker_timeout = lost_worker_timeout
         cache[self._job] = self
 
     def __iter__(self):
@@ -1115,12 +1154,14 @@ class IMapIterator(object):
                 item = self._items.popleft()
             except IndexError:
                 if self._index == self._length:
+                    self._ready = True
                     raise StopIteration
                 self._cond.wait(timeout)
                 try:
                     item = self._items.popleft()
                 except IndexError:
                     if self._index == self._length:
+                        self._ready = True
                         raise StopIteration
                     raise TimeoutError
         finally:
@@ -1129,7 +1170,7 @@ class IMapIterator(object):
         success, value = item
         if success:
             return value
-        raise value
+        raise Exception(value)
 
     __next__ = next                    # XXX
 
@@ -1148,6 +1189,7 @@ class IMapIterator(object):
                 self._unsorted[i] = obj
 
             if self._index == self._length:
+                self._ready = True
                 del self._cache[self._job]
         finally:
             self._cond.release()
@@ -1157,10 +1199,20 @@ class IMapIterator(object):
         try:
             self._length = length
             if self._index == self._length:
+                self._ready = True
                 self._cond.notify()
                 del self._cache[self._job]
         finally:
             self._cond.release()
+
+    def _ack(self, i, time_accepted, pid):
+        self._worker_pids.append(pid)
+
+    def ready(self):
+        return self._ready
+
+    def worker_pids(self):
+        return self._worker_pids
 
 #
 # Class whose instances are returned by `Pool.imap_unordered()`
@@ -1176,6 +1228,7 @@ class IMapUnorderedIterator(IMapIterator):
             self._index += 1
             self._cond.notify()
             if self._index == self._length:
+                self._ready = True
                 del self._cache[self._job]
         finally:
             self._cond.release()

@@ -4,18 +4,19 @@ kombu.utils.eventio
 
 Evented IO support for multiple platforms.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
+
 import errno
 import select
 import socket
 
-try:
-    from eventlet.patcher import is_monkey_patched as is_eventlet
-except ImportError:
-    is_eventlet = lambda module: False  # noqa
+from kombu.syn import detect_environment
+
+__all__ = ["poll"]
 
 POLL_READ = 0x001
 POLL_ERR = 0x008 | 0x010 | 0x2000
@@ -59,7 +60,7 @@ class _epoll(Poller):
             pass
 
     def _poll(self, timeout):
-        return self._epoll.poll(timeout and timeout / 1000.0 or -1)
+        return self._epoll.poll(timeout or -1)
 
 
 class _kqueue(Poller):
@@ -84,8 +85,7 @@ class _kqueue(Poller):
                                                 flags=flags)], 0)
 
     def _poll(self, timeout):
-        kevents = self._kqueue.control(None, 1000,
-                                      timeout and timeout / 1000.0 or timeout)
+        kevents = self._kqueue.control(None, 1000, timeout)
         events = {}
         for kevent in kevents:
             fd = kevent.ident
@@ -123,14 +123,20 @@ class _select(Poller):
             events[fd] = events.get(fd, 0) | POLL_ERR
         return events.items()
 
-if is_eventlet(select):
-    # use Eventlet's non-blocking version of select.select
-    poll = _select
-elif hasattr(select, "epoll"):
-    # Py2.6+ Linux
-    poll = _epoll
-elif hasattr(select, "kqueue"):
-    # Py2.6+ on BSD / Darwin
-    poll = _kqueue
-else:
-    poll = _select
+
+def _get_poller():
+    if detect_environment() in ("eventlet", "gevent"):
+        # greenlet
+        return _select
+    elif hasattr(select, "epoll"):
+        # Py2.6+ Linux
+        return _epoll
+    elif hasattr(select, "kqueue"):
+        # Py2.6+ on BSD / Darwin
+        return _kqueue
+    else:
+        return _select
+
+
+def poll(*args, **kwargs):
+    return _get_poller()(*args, **kwargs)

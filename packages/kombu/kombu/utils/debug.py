@@ -4,14 +4,19 @@ kombu.utils.debug
 
 Debugging support.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
+
 import logging
 
-from kombu.utils.functional import wraps
-from kombu.utils.log import get_logger
+from functools import wraps
+
+from kombu.log import get_logger
+
+__all__ = ["setup_logging", "Logwrapped"]
 
 
 def setup_logging(loglevel=logging.DEBUG, loggers=["kombu.connection",

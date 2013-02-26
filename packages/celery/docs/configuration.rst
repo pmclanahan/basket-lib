@@ -40,9 +40,97 @@ It should contain all you need to run a basic Celery set-up.
     ## available will be used.
     CELERYD_CONCURRENCY = 10
 
+    CELERY_ANNOTATIONS = {"tasks.add": {"rate_limit": "10/s"}}
+
 
 Configuration Directives
 ========================
+
+.. _conf-datetime:
+
+Time and date settings
+----------------------
+
+.. setting:: CELERY_ENABLE_UTC
+
+CELERY_ENABLE_UTC
+~~~~~~~~~~~~~~~~~
+
+If enabled dates and times in messages will be converted to use
+the UTC timezone.
+
+Note that workers running Celery versions below 2.5 will assume a local
+timezone for all messages, so only enable if all workers have been
+upgraded.
+
+Disabled by default.  UTC will be enabled by default in version 3.0.
+
+.. setting:: CELERY_TIMEZONE
+
+CELERY_TIMEZONE
+---------------
+
+Configure Celery to use a custom time zone.
+The timezone value can be any time zone supported by the :mod:`pytz`
+library.  :mod:`pytz` must be installed for the selected zone
+to be used.
+
+If not set then the systems default local time zone is used.
+
+.. _conf-tasks:
+
+Task settings
+-------------
+
+.. setting:: CELERY_ANNOTATIONS
+
+CELERY_ANNOTATIONS
+~~~~~~~~~~~~~~~~~~
+
+This setting can be used to rewrite any task attribute from the
+configuration.  The setting can be a dict, or a list of annotation
+objects that filter for tasks and return a map of attributes
+to change.
+
+
+This will change the ``rate_limit`` attribute for the ``tasks.add``
+task:
+
+.. code-block:: python
+
+    CELERY_ANNOTATIONS = {"tasks.add": {"rate_limit": "10/s"}}
+
+or change the same for all tasks:
+
+.. code-block:: python
+
+    CELERY_ANNOTATIONS = {"*": {"rate_limit": "10/s"}}
+
+
+You can change methods too, for example the ``on_failure`` handler:
+
+.. code-block:: python
+
+    def my_on_failure(self, exc, task_id, args, kwargs, einfo):
+        print("Oh no! Task failed: %r" % (exc, ))
+
+    CELERY_ANNOTATIONS = {"*": {"on_failure": my_on_failure}}
+
+
+If you need more flexibility then you can use objects
+instead of a dict to choose which tasks to annotate:
+
+.. code-block:: python
+
+    class MyAnnotate(object):
+
+        def annotate(self, task):
+            if task.name.startswith("tasks."):
+                return {"rate_limit": "10/s"}
+
+    CELERY_ANNOTATIONS = (MyAnnotate(), {...})
+
+
 
 .. _conf-concurrency:
 
@@ -111,6 +199,10 @@ Can be one of the following:
     Send results back as AMQP messages
     See :ref:`conf-amqp-result-backend`.
 
+* cassandra
+    Use `Cassandra`_ to store the results.
+    See :ref:`conf-cassandra-result-backend`.
+
 .. warning:
 
     While the AMQP result backend is very efficient, you must make sure
@@ -121,6 +213,7 @@ Can be one of the following:
 .. _`MongoDB`: http://mongodb.org
 .. _`Redis`: http://code.google.com/p/redis/
 .. _`Tokyo Tyrant`: http://1978th.net/tokyotyrant/
+.. _`Cassandra`: http://cassandra.apache.org/
 
 .. setting:: CELERY_RESULT_SERIALIZER
 
@@ -371,6 +464,14 @@ CELERY_REDIS_PASSWORD
 
 Password used to connect to the database.
 
+.. setting:: CELERY_REDIS_MAX_CONNECTIONS
+
+CELERY_REDIS_MAX_CONNECTIONS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Maximum number of connections available in the Redis connection
+pool used for sending and retrieving results.
+
 Example configuration
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -431,6 +532,83 @@ Example configuration
         "database": "mydb",
         "taskmeta_collection": "my_taskmeta_collection",
     }
+
+.. _conf-cassandra-result-backend:
+
+Cassandra backend settings
+--------------------------
+
+.. note::
+
+    The Cassandra backend requires the :mod:`pycassa` library:
+    http://pypi.python.org/pypi/pycassa/
+
+    To install the pycassa package use `pip` or `easy_install`::
+
+        $ pip install pycassa
+
+This backend requires the following configuration directives to be set.
+
+.. setting:: CASSANDRA_SERVERS
+
+CASSANDRA_SERVERS
+~~~~~~~~~~~~~~~~~
+
+List of ``host:port`` Cassandra servers. e.g. ``["localhost:9160]"``.
+
+.. setting:: CASSANDRA_KEYSPACE
+
+CASSANDRA_KEYSPACE
+~~~~~~~~~~~~~~~~~~
+
+The keyspace in which to store the results. e.g. ``"tasks_keyspace"``.
+
+.. setting:: CASSANDRA_COLUMN_FAMILY
+
+CASSANDRA_COLUMN_FAMILY
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The column family in which to store the results. eg ``"tasks"``
+
+.. setting:: CASSANDRA_READ_CONSISTENCY
+
+CASSANDRA_READ_CONSISTENCY
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The read consistency used. Values can be ``"ONE"``, ``"QUORUM"`` or ``"ALL"``.
+
+.. setting:: CASSANDRA_WRITE_CONSISTENCY
+
+CASSANDRA_WRITE_CONSISTENCY
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The write consistency used. Values can be ``"ONE"``, ``"QUORUM"`` or ``"ALL"``.
+
+.. setting:: CASSANDRA_DETAILED_MODE
+
+CASSANDRA_DETAILED_MODE
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Enable or disable detailed mode. Default is :const:`False`.
+This mode allows to use the power of Cassandra wide columns to
+store all states for a task as a wide column, instead of only the last one.
+
+To use this mode, you need to configure your ColumnFamily to
+use the ``TimeUUID`` type as a comparator::
+
+    create column family task_results with comparator = TimeUUIDType;
+
+Example configuration
+~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    CASSANDRA_SERVERS = ["localhost:9160"]
+    CASSANDRA_KEYSPACE = "celery"
+    CASSANDRA_COLUMN_FAMILY = "task_results"
+    CASSANDRA_READ_CONSISTENCY = "ONE"
+    CASSANDRA_WRITE_CONSISTENCY = "ONE"
+    CASSANDRA_DETAILED_MODE = True
 
 .. _conf-messaging:
 
@@ -604,13 +782,16 @@ BROKER_POOL_LIMIT
 
 The maximum number of connections that can be open in the connection pool.
 
-A good default value could be 10, or more if you're using eventlet/gevent
-or lots of threads.
+The pool is enabled by default since version 2.5, with a default limit of ten
+connections.  This number can be tweaked depending on the number of
+threads/greenthreads (eventlet/gevent) using a connection.  For example
+running eventlet with 1000 greenlets that use a connection to the broker,
+contention can arise and you should consider increasing the limit.
 
 If set to :const:`None` or 0 the connection pool will be disabled and
 connections will be established and closed for every use.
 
-**Disabled by default.**
+Default (since 2.5) is to use a pool of 10 connections.
 
 .. setting:: BROKER_CONNECTION_TIMEOUT
 
@@ -867,6 +1048,24 @@ A sequence of modules to import when the celery daemon starts.
 This is used to specify the task modules to import, but also
 to import signal handlers and additional remote control commands, etc.
 
+.. setting:: CELERYD_FORCE_EXECV
+
+CELERYD_FORCE_EXECV
+~~~~~~~~~~~~~~~~~~~
+
+On Unix the processes pool will fork, so that child processes
+start with the same memory as the parent process.
+
+This can cause problems as there is a known deadlock condition
+with pthread locking primitives when `fork()` is combined with threads.
+
+You should enable this setting if you are experiencing hangs (deadlocks),
+especially in combination with time limits or having a max tasks per child limit.
+
+This option will be enabled by default in a later version.
+
+This is not a problem on Windows, as it does not have `fork()`.
+
 .. setting:: CELERYD_MAX_TASKS_PER_CHILD
 
 CELERYD_MAX_TASKS_PER_CHILD
@@ -954,6 +1153,8 @@ CELERY_SEND_TASK_ERROR_EMAILS
 The default value for the `Task.send_error_emails` attribute, which if
 set to :const:`True` means errors occurring during task execution will be
 sent to :setting:`ADMINS` by email.
+
+Disabled by default.
 
 .. setting:: ADMINS
 
@@ -1201,10 +1402,55 @@ Can be one of :const:`DEBUG`, :const:`INFO`, :const:`WARNING`,
 
 Default is :const:`WARNING`.
 
+.. _conf-security:
+
+Security
+--------
+
+.. setting:: CELERY_SECURITY_KEY
+
+CELERY_SECURITY_KEY
+~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 2.5
+
+The relative or absolute path to a file containing the private key
+used to sign messages when :ref:`message-signing` is used.
+
+.. setting:: CELERY_SECURITY_CERTIFICATE
+
+CELERY_SECURITY_CERTIFICATE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 2.5
+
+The relative or absolute path to an X.509 certificate file
+used to sign messages when :ref:`message-signing` is used.
+
+.. setting:: CELERY_SECURITY_CERT_STORE
+
+CELERY_SECURITY_CERT_STORE
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 2.5
+
+The directory containing X.509 certificates used for
+:ref:`message-signing`.  Can be a glob with wildcards,
+(for example :file:`/etc/certs/*.pem`).
+
 .. _conf-custom-components:
 
 Custom Component Classes (advanced)
 -----------------------------------
+
+.. setting:: CELERYD_BOOT_STEPS
+
+CELERYD_BOOT_STEPS
+~~~~~~~~~~~~~~~~~~
+
+This setting enables you to add additional components to the worker process.
+It should be a list of module names with :class:`celery.abstract.Component`
+classes, that augments functionality in the worker.
 
 .. setting:: CELERYD_POOL
 
@@ -1228,6 +1474,16 @@ CELERYD_AUTOSCALER
 Name of the autoscaler class to use.
 
 Default is ``"celery.worker.autoscale.Autoscaler"``.
+
+.. setting:: CELERYD_AUTORELOADER
+
+CELERYD_AUTORELOADER
+~~~~~~~~~~~~~~~~~~~~
+
+Name of the autoreloader class used by the worker to reload
+Python modules and files that have changed.
+
+Default is: ``"celery.worker.autoreload.Autoreloader"``.
 
 .. setting:: CELERYD_CONSUMER
 
@@ -1339,7 +1595,7 @@ Please use :setting:`CELERY_TASK_RESULT_EXPIRES` instead.
 
 .. note::
 
-    AMQP result expiration requires RabbitMQ versions 2.1.0 and higher.
+    AMQP result expiration requires RabbitMQ versions 2.1.0 or higher.
 
 .. setting:: CELERY_TASK_ERROR_WHITELIST
 

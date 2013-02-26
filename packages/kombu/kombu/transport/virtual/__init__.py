@@ -6,10 +6,12 @@ Virtual transport implementation.
 
 Emulates the AMQ API for non-AMQ transports.
 
-:copyright: (c) 2009, 2011 by Ask Solem.
+:copyright: (c) 2009, 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
+
 import base64
 import socket
 import warnings
@@ -19,14 +21,15 @@ from time import sleep, time
 from Queue import Empty
 
 from kombu.exceptions import StdChannelError
-from kombu.transport import base
 from kombu.utils import emergency_dump_state, say
 from kombu.utils.compat import OrderedDict
 from kombu.utils.encoding import str_to_bytes, bytes_to_str
 from kombu.utils.finalize import Finalize
 
-from kombu.transport.virtual.scheduling import FairCycle
-from kombu.transport.virtual.exchange import STANDARD_EXCHANGE_TYPES
+from kombu.transport import base
+
+from .scheduling import FairCycle
+from .exchange import STANDARD_EXCHANGE_TYPES
 
 UNDELIVERABLE_FMT = """\
 Message could not be delivered: No queues bound to exchange %(exchange)r
@@ -62,12 +65,12 @@ class BrokerState(object):
     bindings = None
 
     def __init__(self, exchanges=None, bindings=None):
-        if exchanges is None:
-            exchanges = {}
-        if bindings is None:
-            bindings = {}
-        self.exchanges = exchanges
-        self.bindings = bindings
+        self.exchanges = {} if exchanges is None else exchanges
+        self.bindings = {}  if bindings  is None else bindings
+
+    def clear(self):
+        self.exchanges.clear()
+        self.bindings.clear()
 
 
 class QoS(object):
@@ -157,7 +160,7 @@ class QoS(object):
 
             try:
                 self.channel._restore(message)
-            except (KeyboardInterrupt, SystemExit, Exception), exc:
+            except BaseException, exc:
                 errors.append((exc, message))
         delivered.clear()
         return errors
@@ -172,7 +175,7 @@ class QoS(object):
         self._flush()
         state = self._delivered
 
-        if not self.channel.do_restore or getattr(state, "restored"):
+        if not self.channel.do_restore or getattr(state, "restored", None):
             assert not state
             return
 
@@ -324,7 +327,6 @@ class Channel(AbstractChannel, base.StdChannel):
         # instantiate exchange types
         self.exchange_types = dict((typ, cls(self))
                     for typ, cls in self.exchange_types.items())
-        self.auto_delete_queues = {}
 
         self.channel_id = self.connection._next_channel_id()
 
@@ -365,8 +367,6 @@ class Channel(AbstractChannel, base.StdChannel):
 
     def queue_declare(self, queue, passive=False, auto_delete=False, **kwargs):
         """Declare queue."""
-        if auto_delete:
-            self.auto_delete_queues.setdefault(queue, 0)
         if passive and not self._has_queue(queue, **kwargs):
             raise StdChannelError("404",
                     u"NOT_FOUND - no queue %r in vhost %r" % (
@@ -392,7 +392,7 @@ class Channel(AbstractChannel, base.StdChannel):
     def after_reply_message_received(self, queue):
         self.queue_delete(queue)
 
-    def queue_bind(self, queue, exchange, routing_key, arguments=None,
+    def queue_bind(self, queue, exchange, routing_key="", arguments=None,
             **kwargs):
         """Bind `queue` to `exchange` with `routing key`."""
         if queue in self.state.bindings:
@@ -432,8 +432,6 @@ class Channel(AbstractChannel, base.StdChannel):
         """Consume from `queue`"""
         self._tag_to_queue[consumer_tag] = queue
         self._active_queues.append(queue)
-        if queue in self.auto_delete_queues:
-            self.auto_delete_queues[queue] += 1
 
         def _callback(raw_message):
             message = self.Message(self, raw_message)
@@ -452,12 +450,6 @@ class Channel(AbstractChannel, base.StdChannel):
             self._consumers.remove(consumer_tag)
             self._reset_cycle()
             queue = self._tag_to_queue.pop(consumer_tag, None)
-            if queue in self.auto_delete_queues:
-                used = self.auto_delete_queues[queue]
-                if not used - 1:
-                    self.queue_delete(queue)
-                self.auto_delete_queues[queue] -= 1
-
             try:
                 self._active_queues.remove(queue)
             except ValueError:
@@ -587,7 +579,6 @@ class Channel(AbstractChannel, base.StdChannel):
             if self.connection is not None:
                 self.connection.close_channel(self)
         self.exchange_types = None
-        self.auto_delete_queues = None
 
     def encode_body(self, body, encoding=None):
         if encoding:
@@ -627,17 +618,29 @@ class Channel(AbstractChannel, base.StdChannel):
         return self._cycle
 
 
+class Management(base.Management):
+
+    def __init__(self, transport):
+        super(Management, self).__init__(transport)
+        self.channel = transport.client.channel()
+
+    def get_bindings(self):
+        return [dict(destination=q, source=e, routing_key=r)
+                    for q, e, r in self.channel.list_bindings()]
+
+    def close(self):
+        self.channel.close()
+
+
 class Transport(base.Transport):
     """Virtual transport.
 
     :param client: :class:`~kombu.connection.BrokerConnection` instance
 
     """
-    #: channel class used.
     Channel = Channel
-
-    #: cycle class used.
     Cycle = FairCycle
+    Management = Management
 
     #: :class:`BrokerState` containing declared exchanges and
     #: bindings (set by constructor).
@@ -646,9 +649,6 @@ class Transport(base.Transport):
     #: :class:`~kombu.transport.virtual.scheduling.FairCycle` instance
     #: used to fairly drain events from channels (set by constructor).
     cycle = None
-
-    #: default interval between polling channels for new events.
-    interval = 1
 
     #: port number used when no port is specified.
     default_port = None
@@ -660,7 +660,7 @@ class Transport(base.Transport):
     _callbacks = None
 
     #: Time to sleep between unsuccessful polls.
-    polling_interval = 0.1
+    polling_interval = 1.0
 
     def __init__(self, client, **kwargs):
         self.client = client
@@ -669,6 +669,9 @@ class Transport(base.Transport):
         self._callbacks = {}
         self.cycle = self.Cycle(self._drain_channel, self.channels, Empty)
         self._next_channel_id = count(1).next
+        polling_interval = client.transport_options.get("polling_interval")
+        if polling_interval is not None:
+            self.polling_interval = polling_interval
 
     def create_channel(self, connection):
         try:
@@ -708,14 +711,17 @@ class Transport(base.Transport):
     def drain_events(self, connection, timeout=None):
         loop = 0
         time_start = time()
+        get = self.cycle.get
+        polling_interval = self.polling_interval
         while 1:
             try:
-                item, channel = self.cycle.get(timeout=timeout)
+                item, channel = get(timeout=timeout)
             except Empty:
                 if timeout and time() - time_start >= timeout:
                     raise socket.timeout()
                 loop += 1
-                sleep(self.polling_interval)
+                if polling_interval is not None:
+                    sleep(polling_interval)
             else:
                 break
 

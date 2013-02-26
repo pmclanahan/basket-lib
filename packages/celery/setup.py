@@ -29,13 +29,6 @@ classes = """
     License :: OSI Approved :: BSD License
     Topic :: System :: Distributed Computing
     Topic :: Software Development :: Object Brokering
-    Intended Audience :: Developers
-    Intended Audience :: Information Technology
-    Intended Audience :: Science/Research
-    Intended Audience :: Financial and Insurance Industry
-    Intended Audience :: Healthcare Industry
-    Environment :: No Input/Output (Daemon)
-    Environment :: Console
     Programming Language :: Python
     Programming Language :: Python :: 2
     Programming Language :: Python :: 2.5
@@ -60,10 +53,41 @@ if is_py3k:
 
 # -*- Distribution Meta -*-
 
-os.environ["CELERY_NO_EVAL"] = "yes"
-import celery as distmeta
-os.environ.pop("CELERY_NO_EVAL", None)
-sys.modules.pop("celery", None)
+import re
+re_meta = re.compile(r'__(\w+?)__\s*=\s*(.*)')
+re_vers = re.compile(r'VERSION\s*=\s*\((.*?)\)')
+re_doc = re.compile(r'^"""(.+?)"""')
+rq = lambda s: s.strip("\"'")
+
+def add_default(m):
+    attr_name, attr_value = m.groups()
+    return ((attr_name, rq(attr_value)), )
+
+
+def add_version(m):
+    v = list(map(rq, m.groups()[0].split(", ")))
+    return (("VERSION", ".".join(v[0:3]) + "".join(v[3:])), )
+
+
+def add_doc(m):
+    return (("doc", m.groups()[0]), )
+
+pats = {re_meta: add_default,
+        re_vers: add_version,
+        re_doc: add_doc}
+here = os.path.abspath(os.path.dirname(__file__))
+meta_fh = open(os.path.join(here, "celery/__init__.py"))
+try:
+    meta = {}
+    for line in meta_fh:
+        if line.strip() == '# -eof meta-':
+            break
+        for pattern, handler in pats.items():
+            m = pattern.match(line.strip())
+            if m:
+                meta.update(handler(m))
+finally:
+    meta_fh.close()
 
 # -*- Custom Commands -*-
 
@@ -84,12 +108,12 @@ except ImportError:
     install_requires.append("importlib")
 install_requires.extend([
     "anyjson>=0.3.1",
-    "kombu>=1.4.3,<3.0.0",
+    "kombu>=2.1.8,<2.2.0",
 ])
 if is_py3k:
-    install_requires.append("python-dateutil>=2.0.0")
+    install_requires.append("python-dateutil>=2.0")
 else:
-    install_requires.append("python-dateutil>=1.5.0,<2.0.0")
+    install_requires.append("python-dateutil>=1.5,<2.0")
 
 py_version = sys.version_info
 is_jython = sys.platform.startswith("java")
@@ -105,7 +129,7 @@ if is_jython:
 
 # -*- Tests Requires -*-
 
-tests_require = ["nose", "nose-cover3", "sqlalchemy", "mock"]
+tests_require = ["nose", "nose-cover3", "sqlalchemy", "mock", "cl"]
 if sys.version_info < (2, 7):
     tests_require.append("unittest2")
 elif sys.version_info <= (2, 5):
@@ -121,16 +145,13 @@ else:
 # -*- Entry Points -*- #
 
 console_scripts = entrypoints["console_scripts"] = [
+        'celeryd = celery.bin.celeryd:main',
         'celerybeat = celery.bin.celerybeat:main',
         'camqadm = celery.bin.camqadm:main',
         'celeryev = celery.bin.celeryev:main',
         'celeryctl = celery.bin.celeryctl:main',
         'celeryd-multi = celery.bin.celeryd_multi:main',
 ]
-if platform.system() == "Windows":
-    console_scripts.append('celeryd = celery.bin.celeryd:windows_main')
-else:
-    console_scripts.append('celeryd = celery.bin.celeryd:main')
 
 # bundles: Only relevant for Celery developers.
 entrypoints["bundle.bundles"] = ["celery = celery.contrib.bundles:bundles"]
@@ -139,11 +160,11 @@ entrypoints["bundle.bundles"] = ["celery = celery.contrib.bundles:bundles"]
 
 setup(
     name="celery",
-    version=distmeta.__version__,
-    description=distmeta.__doc__,
-    author=distmeta.__author__,
-    author_email=distmeta.__contact__,
-    url=distmeta.__homepage__,
+    version=meta["VERSION"],
+    description=meta["doc"],
+    author=meta["author"],
+    author_email=meta["contact"],
+    url=meta["homepage"],
     platforms=["any"],
     license="BSD",
     packages=find_packages(exclude=['ez_setup', 'tests', 'tests.*']),

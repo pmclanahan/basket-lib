@@ -1,6 +1,6 @@
 Metadata-Version: 1.0
 Name: celery
-Version: 2.4.5
+Version: 2.5.5
 Summary: Distributed Task Queue
 Home-page: http://celeryproject.org
 Author: Ask Solem
@@ -12,39 +12,52 @@ Description: =================================
         
         .. image:: http://cloud.github.com/downloads/ask/celery/celery_128.png
         
-        :Version: 2.4.5
+        :Version: 2.5.5
         :Web: http://celeryproject.org/
         :Download: http://pypi.python.org/pypi/celery/
-        :Source: http://github.com/ask/celery/
+        :Source: http://github.com/celery/celery/
         :Keywords: task queue, job queue, asynchronous, rabbitmq, amqp, redis,
           python, webhooks, queue, distributed
         
         --
         
-        .. _celery-synopsis:
-        
         Celery is an open source asynchronous task queue/job queue based on
-        distributed message passing.  It is focused on real-time operation,
-        but supports scheduling as well.
+        distributed message passing.
+        
+        It is focused on real-time operation, but supports scheduling as well.
         
         The execution units, called tasks, are executed concurrently on one or
         more worker nodes using multiprocessing, `Eventlet`_ or `gevent`_.  Tasks can
         execute asynchronously (in the background) or synchronously
         (wait until ready).
         
-        Celery is used in production systems to process millions of tasks a day.
+        Celery is used in production systems to process millions of tasks every hour.
         
         Celery is written in Python, but the protocol can be implemented in any
         language.  It can also `operate with other languages using webhooks`_.
+        There's also `RCelery`_ for the Ruby programming language, and a `PHP client`_.
         
-        The recommended message broker is `RabbitMQ`_, but `limited support`_ for
-        `Redis`_, `Beanstalk`_, `MongoDB`_, `CouchDB`_ and
+        The recommended message broker is `RabbitMQ`_, but support for
+        `Redis`_, `MongoDB`_, `Beanstalk`_, `Amazon SQS`_, `CouchDB`_ and
         databases (using `SQLAlchemy`_ or the `Django ORM`_) is also available.
         
+        Celery is easy to integrate with web frameworks, some of which even have
+        integration packages:
         
-        Celery is easy to integrate with `Django`_, `Pylons`_ and `Flask`_, using
-        the `django-celery`_, `celery-pylons`_ and `Flask-Celery`_ add-on packages.
+            +-----------------+------------------------+
+            | `Django`_       | `django-celery`_       |
+            +-----------------+------------------------+
+            | `Pyramid`_      | `pyramid_celery`_      |
+            +-----------------+------------------------+
+            | `Pylons`_       | `celery-pylons`_       |
+            +-----------------+------------------------+
+            | `Flask`_        | `flask-celery`_        |
+            +-----------------+------------------------+
+            | `web2py`_       | `web2py-celery`_       |
+            +-----------------+------------------------+
         
+        .. _`RCelery`: http://leapfrogdevelopment.github.com/rcelery/
+        .. _`PHP client`: https://github.com/gjedeer/celery-php
         .. _`RabbitMQ`: http://www.rabbitmq.com/
         .. _`Redis`: http://code.google.com/p/redis/
         .. _`SQLAlchemy`: http://www.sqlalchemy.org/
@@ -55,20 +68,18 @@ Description: =================================
         .. _`Beanstalk`: http://kr.github.com/beanstalkd/
         .. _`MongoDB`: http://mongodb.org/
         .. _`CouchDB`: http://couchdb.apache.org/
+        .. _`Amazon SQS`: http://aws.amazon.com/sqs/
         .. _`Pylons`: http://pylonshq.com/
         .. _`Flask`: http://flask.pocoo.org/
+        .. _`web2py`: http://web2py.com/
+        .. _`Pyramid`: http://docs.pylonsproject.org/en/latest/docs/pyramid.html
+        .. _`pyramid_celery`: http://pypi.python.org/pypi/pyramid_celery/
         .. _`django-celery`: http://pypi.python.org/pypi/django-celery
         .. _`celery-pylons`: http://pypi.python.org/pypi/celery-pylons
-        .. _`Flask-Celery`: http://github.com/ask/flask-celery/
+        .. _`flask-celery`: http://github.com/celery/flask-celery/
+        .. _`web2py-celery`: http://code.google.com/p/web2py-celery/
         .. _`operate with other languages using webhooks`:
-            http://ask.github.com/celery/userguide/remote-tasks.html
-        .. _`limited support`:
-            http://kombu.readthedocs.org/en/latest/introduction.html#transport-comparison
-        
-        .. contents::
-            :local:
-        
-        .. _celery-overview:
+            http://celery.github.com/celery/userguide/remote-tasks.html
         
         Overview
         ========
@@ -83,8 +94,6 @@ Description: =================================
         
         The result of the task can be stored for later retrieval (called its
         "tombstone").
-        
-        .. _celery-example:
         
         Example
         =======
@@ -106,8 +115,6 @@ Description: =================================
             8
         
         Simple!
-        
-        .. _celery-features:
         
         Features
         ========
@@ -141,7 +148,7 @@ Description: =================================
             |                 | result store backend. You can wait for the result, |
             |                 | retrieve it later, or ignore it.                   |
             +-----------------+----------------------------------------------------+
-            | Result Stores   | Database, `MongoDB`_, `Redis`_, `Tokyo Tyrant`,    |
+            | Result Stores   | Database, `MongoDB`_, `Redis`_,                    |
             |                 | `Cassandra`, or `AMQP`_ (message notification).    |
             +-----------------+----------------------------------------------------+
             | Webhooks        | Your tasks can also be HTTP callbacks, enabling    |
@@ -199,20 +206,17 @@ Description: =================================
         .. _`clustering`: http://www.rabbitmq.com/clustering.html
         .. _`HA`: http://www.rabbitmq.com/pacemaker.html
         .. _`AMQP`: http://www.amqp.org/
-        .. _`Stomp`: http://stomp.codehaus.org/
-        .. _`Tokyo Tyrant`: http://tokyocabinet.sourceforge.net/
-        
-        .. _celery-documentation:
         
         Documentation
         =============
         
-        The `latest documentation`_ with user guides, tutorials and API reference
-        is hosted at Github.
+        Documentation for the production version can be found here:
         
-        .. _`latest documentation`: http://ask.github.com/celery/
+            http://docs.celeryproject.org/en/latest
         
-        .. _celery-installation:
+        and the documentation for the development version can be found here:
+        
+            http://celery.github.com/celery/
         
         Installation
         ============
@@ -262,8 +266,6 @@ Description: =================================
         .. _`bundle-celery`:
             http://pypi.python.org/pypi/bundle-celery/
         
-        .. _celery-installing-from-source:
-        
         Downloading and installing from source
         --------------------------------------
         
@@ -277,21 +279,17 @@ Description: =================================
             $ python setup.py build
             # python setup.py install # as root
         
-        .. _celery-installing-from-git:
-        
         Using the development version
         -----------------------------
         
         You can clone the repository by doing the following::
         
-            $ git clone git://github.com/ask/celery.git
+            $ git clone git://github.com/celery/celery.git
         
-        .. _getting-help:
         
         Getting Help
         ============
         
-        .. _mailing-list:
         
         Mailing list
         ------------
@@ -301,38 +299,32 @@ Description: =================================
         
         .. _`celery-users`: http://groups.google.com/group/celery-users/
         
-        .. _irc-channel:
         
         IRC
         ---
         
-        Come chat with us on IRC. The `#celery`_ channel is located at the `Freenode`_
+        Come chat with us on IRC. The **#celery** channel is located at the `Freenode`_
         network.
         
-        .. _`#celery`: irc://irc.freenode.net/celery
         .. _`Freenode`: http://freenode.net
         
-        .. _bug-tracker:
         
         Bug tracker
         ===========
         
         If you have any suggestions, bug reports or annoyances please report them
-        to our issue tracker at http://github.com/ask/celery/issues/
-        
-        .. _wiki:
+        to our issue tracker at http://github.com/celery/celery/issues/
         
         Wiki
         ====
         
-        http://wiki.github.com/ask/celery/
+        http://wiki.github.com/celery/celery/
         
-        .. _contributing-short:
         
         Contributing
         ============
         
-        Development of `celery` happens at Github: http://github.com/ask/celery
+        Development of `celery` happens at Github: http://github.com/celery/celery
         
         You are highly encouraged to participate in the development
         of `celery`. If you don't like Github (for some reason) you're welcome
@@ -341,9 +333,7 @@ Description: =================================
         Be sure to also read the `Contributing to Celery`_ section in the
         documentation.
         
-        .. _`Contributing to Celery`: http://ask.github.com/celery/contributing.html
-        
-        .. _license:
+        .. _`Contributing to Celery`: http://celery.github.com/celery/contributing.html
         
         License
         =======
@@ -359,13 +349,6 @@ Classifier: Development Status :: 5 - Production/Stable
 Classifier: License :: OSI Approved :: BSD License
 Classifier: Topic :: System :: Distributed Computing
 Classifier: Topic :: Software Development :: Object Brokering
-Classifier: Intended Audience :: Developers
-Classifier: Intended Audience :: Information Technology
-Classifier: Intended Audience :: Science/Research
-Classifier: Intended Audience :: Financial and Insurance Industry
-Classifier: Intended Audience :: Healthcare Industry
-Classifier: Environment :: No Input/Output (Daemon)
-Classifier: Environment :: Console
 Classifier: Programming Language :: Python
 Classifier: Programming Language :: Python :: 2
 Classifier: Programming Language :: Python :: 2.5

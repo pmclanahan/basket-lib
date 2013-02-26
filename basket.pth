@@ -26,6 +26,7 @@ packages/python-dateutil
 packages/python-ldap
 packages/pytz
 packages/setuptools
+packages/six
 packages/suds
 packages/werkzeug
 src/check

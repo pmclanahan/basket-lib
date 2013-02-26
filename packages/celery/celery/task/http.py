@@ -5,7 +5,7 @@
 
     Task webhooks implementation.
 
-    :copyright: (c) 2009 - 2011 by Ask Solem.
+    :copyright: (c) 2009 - 2012 by Ask Solem.
     :license: BSD, see LICENSE for more details.
 
 """
@@ -70,7 +70,8 @@ def extract_response(raw_response):
     try:
         payload = deserialize(raw_response)
     except ValueError, exc:
-        raise InvalidResponseError(str(exc))
+        raise InvalidResponseError, InvalidResponseError(
+                str(exc)), sys.exc_info()[2]
 
     status = payload["status"]
     if status == "success":
@@ -108,12 +109,10 @@ class MutableURL(object):
     def __str__(self):
         scheme, netloc, path, params, query, fragment = self.parts
         query = urlencode(utf8dict(self.query.items()))
-        components = ["%s://" % scheme,
-                      "%s" % netloc,
-                      path and "%s" % path or "/",
-                      params and ";%s" % params or None,
-                      query and "?%s" % query or None,
-                      fragment and "#%s" % fragment or None]
+        components = [scheme + "://", netloc, path or "/",
+                      ";%s" % params   if params   else "",
+                      "?%s" % query    if query    else "",
+                      "#%s" % fragment if fragment else ""]
         return "".join(filter(None, components))
 
     def __repr__(self):

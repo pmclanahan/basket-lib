@@ -5,7 +5,7 @@
 
     Application Base Class.
 
-    :copyright: (c) 2009 - 2011 by Ask Solem.
+    :copyright: (c) 2009 - 2012 by Ask Solem.
     :license: BSD, see LICENSE for more details.
 
 """
@@ -13,21 +13,24 @@ from __future__ import absolute_import
 from __future__ import with_statement
 
 import os
+import warnings
 import platform as _platform
 
 from contextlib import contextmanager
 from copy import deepcopy
 from functools import wraps
-from threading import Lock
+
+from kombu.clocks import LamportClock
 
 from .. import datastructures
 from .. import platforms
+from ..exceptions import AlwaysEagerIgnored
 from ..utils import cached_property, instantiate, lpmerge
 
-from .defaults import DEFAULTS, find_deprecated_settings
+from .defaults import DEFAULTS, find_deprecated_settings, find
 
 import kombu
-if kombu.VERSION < (1, 1, 0):
+if kombu.VERSION < (2, 0):
     raise ImportError("Celery requires Kombu version 1.1.0 or higher.")
 
 BUGREPORT_INFO = """
@@ -35,56 +38,6 @@ platform -> system:%(system)s arch:%(arch)s imp:%(py_i)s
 software -> celery:%(celery_v)s kombu:%(kombu_v)s py:%(py_v)s
 settings -> transport:%(transport)s results:%(results)s
 """
-
-
-class LamportClock(object):
-    """Lamport's logical clock.
-
-    From Wikipedia:
-
-    "A Lamport logical clock is a monotonically incrementing software counter
-    maintained in each process.  It follows some simple rules:
-
-        * A process increments its counter before each event in that process;
-        * When a process sends a message, it includes its counter value with
-          the message;
-        * On receiving a message, the receiver process sets its counter to be
-          greater than the maximum of its own value and the received value
-          before it considers the message received.
-
-    Conceptually, this logical clock can be thought of as a clock that only
-    has meaning in relation to messages moving between processes.  When a
-    process receives a message, it resynchronizes its logical clock with
-    the sender.
-
-    .. seealso::
-
-        http://en.wikipedia.org/wiki/Lamport_timestamps
-        http://en.wikipedia.org/wiki/Lamport's_Distributed_
-            Mutual_Exclusion_Algorithm
-
-    *Usage*
-
-    When sending a message use :meth:`forward` to increment the clock,
-    when receiving a message use :meth:`adjust` to sync with
-    the time stamp of the incoming message.
-
-    """
-    #: The clocks current value.
-    value = 0
-
-    def __init__(self, initial_value=0):
-        self.value = initial_value
-        self.mutex = Lock()
-
-    def adjust(self, other):
-        with self.mutex:
-            self.value = max(self.value, other) + 1
-
-    def forward(self):
-        with self.mutex:
-            self.value += 1
-        return self.value
 
 
 class Settings(datastructures.ConfigurationView):
@@ -109,10 +62,19 @@ class Settings(datastructures.ConfigurationView):
 
     @property
     def BROKER_HOST(self):
-
         return (os.environ.get("CELERY_BROKER_URL") or
                 self.get("BROKER_URL") or
                 self.get("BROKER_HOST"))
+
+    def find_option(self, name, namespace="celery"):
+        return find(name, namespace)
+
+    def get_by_parts(self, *parts):
+        return self["_".join(filter(None, parts))]
+
+    def find_value_for_key(self, name, namespace="celery"):
+        ns, key, _ = self.find_option(name, namespace=namespace)
+        return self.get_by_parts(ns, key)
 
 
 class BaseApp(object):
@@ -121,12 +83,12 @@ class BaseApp(object):
     IS_OSX = platforms.IS_OSX
     IS_WINDOWS = platforms.IS_WINDOWS
 
-    amqp_cls = "celery.app.amqp.AMQP"
+    amqp_cls = "celery.app.amqp:AMQP"
     backend_cls = None
-    events_cls = "celery.events.Events"
-    loader_cls = "celery.loaders.app.AppLoader"
-    log_cls = "celery.log.Logging"
-    control_cls = "celery.task.control.Control"
+    events_cls = "celery.events:Events"
+    loader_cls = "celery.loaders.app:AppLoader"
+    log_cls = "celery.log:Logging"
+    control_cls = "celery.task.control:Control"
 
     _pool = None
 
@@ -198,6 +160,10 @@ class BaseApp(object):
         :meth:`~celery.app.task.BaseTask.apply_async`.
 
         """
+        if self.conf.CELERY_ALWAYS_EAGER:
+            warnings.warn(AlwaysEagerIgnored(
+                "CELERY_ALWAYS_EAGER has no effect on send_task"))
+
         router = self.amqp.Router(queues)
         result_cls = result_cls or self.AsyncResult
 
@@ -308,6 +274,9 @@ class BaseApp(object):
         find_deprecated_settings(c)
         return c
 
+    def now(self):
+        return self.loader.now(utc=self.conf.CELERY_ENABLE_UTC)
+
     def mail_admins(self, subject, body, fail_silently=False):
         """Send an email to the admins in the :setting:`ADMINS` setting."""
         if self.conf.ADMINS:
@@ -321,6 +290,11 @@ class BaseApp(object):
                                        timeout=self.conf.EMAIL_TIMEOUT,
                                        use_ssl=self.conf.EMAIL_USE_SSL,
                                        use_tls=self.conf.EMAIL_USE_TLS)
+
+    def select_queues(self, queues=None):
+        if queues:
+            return self.amqp.queues.select_subset(queues,
+                                    self.conf.CELERY_CREATE_MISSING_QUEUES)
 
     def either(self, default_key, *values):
         """Fallback to the value of a configuration key if none of the
@@ -337,9 +311,9 @@ class BaseApp(object):
 
     def _get_backend(self):
         from ..backends import get_backend_cls
-        backend_cls = self.backend_cls or self.conf.CELERY_RESULT_BACKEND
-        backend_cls = get_backend_cls(backend_cls, loader=self.loader)
-        return backend_cls(app=self)
+        return get_backend_cls(
+                    self.backend_cls or self.conf.CELERY_RESULT_BACKEND,
+                    loader=self.loader)(app=self)
 
     def _get_config(self):
         return Settings({}, [self.prepare_config(self.loader.conf),
@@ -370,8 +344,8 @@ class BaseApp(object):
                 register_after_fork(self, self._after_fork)
             except ImportError:
                 pass
-            limit = self.conf.BROKER_POOL_LIMIT
-            self._pool = self.broker_connection().Pool(limit)
+            self._pool = self.broker_connection().Pool(
+                            limit=self.conf.BROKER_POOL_LIMIT)
         return self._pool
 
     @cached_property
@@ -411,3 +385,8 @@ class BaseApp(object):
     def log(self):
         """Logging utilities.  See :class:`~celery.log.Logging`."""
         return instantiate(self.log_cls, app=self)
+
+    @cached_property
+    def tasks(self):
+        from ..registry import tasks
+        return tasks

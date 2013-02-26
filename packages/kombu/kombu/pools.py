@@ -4,17 +4,19 @@ kombu.pools
 
 Public resource pools.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
+
 import os
 
 from itertools import chain
 
-from kombu.connection import Resource
-from kombu.messaging import Producer
-from kombu.utils import EqualityDict
+from .connection import Resource
+from .messaging import Producer
+from .utils import EqualityDict
 
 __all__ = ["ProducerPool", "PoolGroup", "register_group",
            "connections", "producers", "get_limit", "set_limit", "reset"]
@@ -26,17 +28,18 @@ disable_limit_protection = os.environ.get("KOMBU_DISABLE_LIMIT_PROTECTION")
 
 
 class ProducerPool(Resource):
+    Producer = Producer
 
     def __init__(self, connections, *args, **kwargs):
         self.connections = connections
+        self.Producer = kwargs.pop("Producer", None) or self.Producer
         super(ProducerPool, self).__init__(*args, **kwargs)
 
-    def Producer(self, connection):
-        return Producer(connection)
+    def _acquire_connection(self):
+        return self.connections.acquire(block=True)
 
     def create_producer(self):
-        connection = self.connections.acquire(block=True)
-        return self.Producer(connection)
+        return self.Producer(self._acquire_connection())
 
     def new(self):
         return lambda: self.create_producer()
@@ -50,13 +53,14 @@ class ProducerPool(Resource):
         if callable(p):
             p = p()
         if not p.channel:
-            p.connection = self.connections.acquire(block=True)
-            p.revive(p.connection.default_channel)
+            connection = self._acquire_connection()
+            p.revive(connection.default_channel)
         return p
 
     def release(self, resource):
-        resource.connection.release()
-        resource.connection = resource.channel = None
+        if resource.connection:
+            resource.connection.release()
+        resource.channel = None
         super(ProducerPool, self).release(resource)
 
 
@@ -108,7 +112,7 @@ def get_limit():
 def set_limit(limit, force=False, reset_after=False):
     limit = limit or 0
     glimit = _limit[0] or 0
-    if limit or 0 < glimit:
+    if limit < glimit:
         if not disable_limit_protection and (_used[0] and not force):
             raise RuntimeError("Can't lower limit after pool in use.")
         reset_after = True
@@ -134,5 +138,5 @@ def reset(*args, **kwargs):
 try:
     from multiprocessing.util import register_after_fork
     register_after_fork(connections, reset)
-except ImportError:
+except ImportError:  # pragma: no cover
     pass

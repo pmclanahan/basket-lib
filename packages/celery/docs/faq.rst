@@ -95,7 +95,7 @@ These "virtual transports" may have limited broadcast and event functionality.
 For example remote control commands only works with AMQP and Redis.
 
 .. _`Using other queues`:
-    http://ask.github.com/celery/tutorials/otherqueues.html
+    http://celery.github.com/celery/tutorials/otherqueues.html
 
 Redis or a database won't perform as well as
 an AMQP broker. If you have strict reliability requirements you are
@@ -125,7 +125,7 @@ information you can even create simple web servers that enable preloading of
 code. See: `User Guide: Remote Tasks`_.
 
 .. _`User Guide: Remote Tasks`:
-    http://ask.github.com/celery/userguide/remote-tasks.html
+    http://celery.github.com/celery/userguide/remote-tasks.html
 
 .. _faq-troubleshooting:
 
@@ -455,7 +455,38 @@ How can I reuse the same connection when applying tasks?
 --------------------------------------------------------
 
 **Answer**: See the :setting:`BROKER_POOL_LIMIT` setting.
-This setting will be enabled by default in 3.0.
+The connection pool is enabled by default since version 2.5.
+
+.. _faq-sudo-subprocess:
+
+Sudo in a :mod:`subprocess` returns :const:`None`
+-------------------------------------------------
+
+There is a sudo configuration option that makes it illegal for process
+without a tty to run sudo::
+
+    Defaults requiretty
+
+If you have this configuration in your :file:`/etc/sudoers` file then
+tasks will not be able to call sudo when celeryd is running as a daemon.
+If you want to enable that, then you need to remove the line from sudoers.
+
+See: http://timelordz.com/wiki/Apache_Sudo_Commands
+
+.. _faq-deletes-unknown-tasks:
+
+Why do workers delete tasks from the queue if they are unable to process them?
+------------------------------------------------------------------------------
+**Answer**:
+
+The worker discards unknown tasks, messages with encoding errors and messages
+that doesn't contain the proper fields (as per the task message protocol).
+
+If it did not ack (delete) them, they would be redelivered again and again
+causing a loop.
+
+There has been talk about moving these messages to a dead-letter queue,
+but that has not yet been implemented.
 
 .. _faq-execute-task-by-name:
 
@@ -488,8 +519,7 @@ For more information see :ref:`task-request-info`.
 Can I specify a custom task_id?
 -------------------------------
 
-**Answer**: Yes.  Use the `task_id` argument to
-:meth:`~celery.execute.apply_async`::
+**Answer**: Yes.  Use the `task_id` argument to :meth:`Task.apply_async`::
 
     >>> task.apply_async(args, kwargs, task_id="...")
 
@@ -674,10 +704,10 @@ Or to schedule a periodic task at a specific time, use the
 
 .. code-block:: python
 
-    from celery.task.schedules import crontab
+    from celery.schedules import crontab
     from celery.task import periodic_task
 
-    @periodic_task(run_every=crontab(hours=7, minute=30, day_of_week="mon"))
+    @periodic_task(run_every=crontab(hour=7, minute=30, day_of_week="mon"))
     def every_monday_morning():
         print("This is run every Monday morning at 7:30")
 
@@ -704,6 +734,38 @@ terminated mid-execution, and they will not be re-run unless you have the
 How do I run celeryd in the background on [platform]?
 -----------------------------------------------------
 **Answer**: Please see :ref:`daemonizing`.
+
+.. _faq-django:
+
+Django
+======
+
+.. _faq-django-database-tables:
+
+What purpose does the database tables created by django-celery have?
+--------------------------------------------------------------------
+
+Several database tables are created by default, these relate to
+
+* Monitoring
+
+    When you use the django-admin monitor, the cluster state is written
+    to the ``TaskState`` and ``WorkerState`` models.
+
+* Periodic tasks
+
+    When the database-backed schedule is used the periodic task
+    schedule is taken from the ``PeriodicTask`` model, there are
+    also several other helper tables (``IntervalSchedule``,
+    ``CrontabSchedule``, ``PeriodicTasks``).
+
+* Task results
+
+    The database result backend is enabled by default when using django-celery
+    (this is for historical reasons, and thus for backward compatibility).
+
+    The results are stored in the ``TaskMeta`` and ``TaskSetMeta`` models.
+    *these tables are not created if another result backend is configured*.
 
 .. _faq-windows:
 

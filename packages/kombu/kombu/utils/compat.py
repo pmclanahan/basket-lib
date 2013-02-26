@@ -4,35 +4,11 @@ kombu.utils.compat
 
 Helps compatibility with older Python versions.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
 import sys
-
-############## __builtin__.all ##############################################
-
-try:
-    all([True])
-    all = all
-except NameError:
-    def all(iterable):  # noqa
-        for item in iterable:
-            if not item:
-                return False
-        return True
-
-############## __builtin__.any ##############################################
-
-try:
-    any([True])
-    any = any
-except NameError:
-    def any(iterable):  # noqa
-        for item in iterable:
-            if item:
-                return True
-        return False
 
 ############## collections.OrderedDict #######################################
 
@@ -275,50 +251,69 @@ class LifoQueue(Queue):
     def _get(self):
         return self.queue.pop()
 
-############## collections.defaultdict ######################################
+############## logging.handlers.WatchedFileHandler ##########################
+import logging
+import os
+import platform as _platform
 
-try:
-    from collections import defaultdict
-except ImportError:
+from stat import ST_DEV, ST_INO
 
-    # Written by Jason Kirtland, taken from Python Cookbook:
-    # <http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/523034>
-    class defaultdict(dict):  # noqa
+if _platform.system() == "Windows":
+    #since windows doesn't go with WatchedFileHandler use FileHandler instead
+    WatchedFileHandler = logging.FileHandler
+else:
+    try:
+        from logging.handlers import WatchedFileHandler
+    except ImportError:
+        class WatchedFileHandler(logging.FileHandler):  # noqa
+            """
+            A handler for logging to a file, which watches the file
+            to see if it has changed while in use. This can happen because of
+            usage of programs such as newsyslog and logrotate which perform
+            log file rotation. This handler, intended for use under Unix,
+            watches the file to see if it has changed since the last emit.
+            (A file has changed if its device or inode have changed.)
+            If it has changed, the old file stream is closed, and the file
+            opened to get a new stream.
 
-        def __init__(self, default_factory=None, *args, **kwargs):
-            dict.__init__(self, *args, **kwargs)
-            self.default_factory = default_factory
+            This handler is not appropriate for use under Windows, because
+            under Windows open files cannot be moved or renamed - logging
+            opens the files with exclusive locks - and so there is no need
+            for such a handler. Furthermore, ST_INO is not supported under
+            Windows; stat always returns zero for this value.
 
-        def __getitem__(self, key):
-            try:
-                return dict.__getitem__(self, key)
-            except KeyError:
-                return self.__missing__(key)
+            This handler is based on a suggestion and patch by Chad J.
+            Schroeder.
+            """
+            def __init__(self, *args, **kwargs):
+                logging.FileHandler.__init__(self, *args, **kwargs)
 
-        def __missing__(self, key):
-            if self.default_factory is None:
-                raise KeyError(key)
-            self[key] = value = self.default_factory()
-            return value
+                if not os.path.exists(self.baseFilename):
+                    self.dev, self.ino = -1, -1
+                else:
+                    stat = os.stat(self.baseFilename)
+                    self.dev, self.ino = stat[ST_DEV], stat[ST_INO]
 
-        def __reduce__(self):
-            f = self.default_factory
-            args = f is None and tuple() or f
-            return type(self), args, None, None, self.iteritems()
+            def emit(self, record):
+                """
+                Emit a record.
 
-        def copy(self):
-            return self.__copy__()
-
-        def __copy__(self):
-            return type(self)(self.default_factory, self)
-
-        def __deepcopy__(self):
-            import copy
-            return type(self)(self.default_factory,
-                        copy.deepcopy(self.items()))
-
-        def __repr__(self):
-            return "defaultdict(%s, %s)" % (self.default_factory,
-                                            dict.__repr__(self))
-    import collections
-    collections.defaultdict = defaultdict               # Pickle needs this.
+                First check if the underlying file has changed, and if it
+                has, close the old stream and reopen the file to get the
+                current stream.
+                """
+                if not os.path.exists(self.baseFilename):
+                    stat = None
+                    changed = 1
+                else:
+                    stat = os.stat(self.baseFilename)
+                    changed = ((stat[ST_DEV] != self.dev) or
+                               (stat[ST_INO] != self.ino))
+                if changed and self.stream is not None:
+                    self.stream.flush()
+                    self.stream.close()
+                    self.stream = self._open()
+                    if stat is None:
+                        stat = os.stat(self.baseFilename)
+                    self.dev, self.ino = stat[ST_DEV], stat[ST_INO]
+                logging.FileHandler.emit(self, record)

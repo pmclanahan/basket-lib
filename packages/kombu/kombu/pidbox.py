@@ -4,19 +4,22 @@ kombu.pidbox
 
 Generic process mailbox.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
 
 import socket
 
 from copy import copy
 from itertools import count
 
-from kombu.entity import Exchange, Queue
-from kombu.messaging import Consumer, Producer
-from kombu.utils import kwdict, uuid
+from .entity import Exchange, Queue
+from .messaging import Consumer, Producer
+from .utils import kwdict, uuid
+
+__all__ = ["Node", "Mailbox"]
 
 
 class Node(object):

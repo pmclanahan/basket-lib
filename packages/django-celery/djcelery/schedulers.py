@@ -2,19 +2,20 @@ from __future__ import absolute_import
 
 import logging
 
-from datetime import datetime
-from multiprocessing.util import Finalize
+from warnings import warn
 
 from anyjson import deserialize, serialize
-from django.db import transaction
-from django.core.exceptions import ObjectDoesNotExist
-
 from celery import schedules
 from celery.beat import Scheduler, ScheduleEntry
 from celery.utils.encoding import safe_str, safe_repr
+from kombu.utils.finalize import Finalize
+
+from django.db import transaction
+from django.core.exceptions import ObjectDoesNotExist
 
 from .models import (PeriodicTask, PeriodicTasks,
                      CrontabSchedule, IntervalSchedule)
+from .utils import DATABASE_ERRORS, now
 
 
 class ModelEntry(ScheduleEntry):
@@ -53,10 +54,10 @@ class ModelEntry(ScheduleEntry):
         return self.schedule.is_due(self.last_run_at)
 
     def _default_now(self):
-        return datetime.now()
+        return now()
 
     def next(self):
-        self.model.last_run_at = datetime.now()
+        self.model.last_run_at = now()
         self.model.total_run_count += 1
         self.model.no_changes = True
         return self.__class__(self.model)
@@ -73,6 +74,7 @@ class ModelEntry(ScheduleEntry):
     @classmethod
     def to_model_schedule(cls, schedule):
         for schedule_type, model_type, model_field in cls.model_schedules:
+            schedule = schedules.maybe_schedule(schedule)
             if isinstance(schedule, schedule_type):
                 model_schedule = model_type.from_schedule(schedule)
                 model_schedule.save()
@@ -81,6 +83,7 @@ class ModelEntry(ScheduleEntry):
 
     @classmethod
     def from_entry(cls, name, skip_fields=("relative", "options"), **entry):
+        options = entry.get("options") or {}
         fields = dict(entry)
         for skip_field in skip_fields:
             fields.pop(skip_field, None)
@@ -89,11 +92,14 @@ class ModelEntry(ScheduleEntry):
         fields[model_field] = model_schedule
         fields["args"] = serialize(fields.get("args") or [])
         fields["kwargs"] = serialize(fields.get("kwargs") or {})
+        fields["queue"] = options.get("queue")
+        fields["exchange"] = options.get("exchange")
+        fields["routing_key"] = options.get("routing_key")
         return cls(PeriodicTask._default_manager.update_or_create(name=name,
                                                             defaults=fields))
 
     def __repr__(self):
-        return "<ModelEntry: %s %s(*%s, **%s) {%s}" % (safe_str(self.name),
+        return "<ModelEntry: %s %s(*%s, **%s) {%s}>" % (safe_str(self.name),
                                                        self.task,
                                                        safe_repr(self.args),
                                                        safe_repr(self.kwargs),
@@ -129,20 +135,23 @@ class DatabaseScheduler(Scheduler):
 
     def schedule_changed(self):
         if self._last_timestamp is not None:
-            # If MySQL is running with transaction isolation level
-            # REPEATABLE-READ (default), then we won't see changes done by
-            # other transactions until the current transaction is
-            # committed (Issue #41).
             try:
-                transaction.commit()
-            except transaction.TransactionManagementError:
-                pass  # not in transaction management.
+                # If MySQL is running with transaction isolation level
+                # REPEATABLE-READ (default), then we won't see changes done by
+                # other transactions until the current transaction is
+                # committed (Issue #41).
+                try:
+                    transaction.commit()
+                except transaction.TransactionManagementError:
+                    pass  # not in transaction management.
 
-            ts = self.Changes.last_change()
-            if not ts or ts < self._last_timestamp:
+                ts = self.Changes.last_change()
+                if not ts or ts < self._last_timestamp:
+                    return False
+            except DATABASE_ERRORS, exc:
+                warn(RuntimeWarning("Database gave error: %r" % (exc, )))
                 return False
-
-        self._last_timestamp = datetime.now()
+        self._last_timestamp = now()
         return True
 
     def reserve(self, entry):
@@ -178,6 +187,15 @@ class DatabaseScheduler(Scheduler):
                     "Couldn't add entry %r to database schedule: %r. "
                     "Contents: %r" % (name, exc, entry))
         self.schedule.update(s)
+
+    def install_default_entries(self, data):
+        entries = {}
+        if self.app.conf.CELERY_TASK_RESULT_EXPIRES:
+            entries.setdefault("celery.backend_cleanup", {
+                    "task": "celery.backend_cleanup",
+                    "schedule": schedules.crontab("0", "4", "*", nowfun=now),
+                    "options": {"expires": 12 * 3600}})
+        self.update_from_dict(entries)
 
     def get_schedule(self):
         if self.schedule_changed():

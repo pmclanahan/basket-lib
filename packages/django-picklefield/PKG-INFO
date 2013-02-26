@@ -1,6 +1,6 @@
-Metadata-Version: 1.0
+Metadata-Version: 1.1
 Name: django-picklefield
-Version: 0.1.9
+Version: 0.3.0
 Summary: Pickled object field for Django
 Home-page: http://github.com/gintas/django-picklefield
 Author: Gintautas Miliauskas
@@ -122,6 +122,17 @@ Description: -----
         Changes
         -------
         
+        Changes in version 0.3.0
+        ========================
+        
+         * Python 3 support (thanks to Rafal Stozek).
+        
+        Changes in version 0.2.0
+        ========================
+        
+         * Allow pickling of subclasses of django.db.models.Model (thanks to Simon
+           Charette)
+        
         Changes in version 0.1.9
         ========================
         
@@ -189,6 +200,13 @@ Description: -----
         Send feedback and suggestions to gintautas@miliauskas.lt .
         
 Platform: UNKNOWN
-Classifier: Development Status :: 4 - Beta
+Classifier: Development Status :: 5 - Production/Stable
 Classifier: Framework :: Django
+Classifier: Intended Audience :: Developers
 Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 2.5
+Classifier: Programming Language :: Python :: 2.6
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3.2
+Classifier: Programming Language :: Python :: 3.3

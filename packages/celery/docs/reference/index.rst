@@ -17,10 +17,12 @@
     celery.task.sets
     celery.task.chords
     celery.result
+    celery.actors
     celery.task.control
     celery.task.http
     celery.schedules
     celery.signals
+    celery.security
     celery.utils.mail
     celery.exceptions
     celery.loaders
@@ -31,6 +33,7 @@
     celery.states
     celery.contrib.abortable
     celery.contrib.batches
+    celery.contrib.migrate
     celery.contrib.rdb
     celery.events
     celery.events.state

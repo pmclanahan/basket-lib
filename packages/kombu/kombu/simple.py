@@ -4,18 +4,22 @@ kombu.simple
 
 Simple interface.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
+
 import socket
 
 from collections import deque
 from time import time
 from Queue import Empty
 
-from kombu import entity
-from kombu import messaging
+from . import entity
+from . import messaging
+
+__all__ = ["SimpleQueue", "SimpleBuffer"]
 
 
 class SimpleBase(object):

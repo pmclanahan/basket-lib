@@ -6,20 +6,24 @@ Carrot compatible interface for :class:`Publisher` and :class:`Producer`.
 
 See http://packages.python.org/pypi/carrot for documentation.
 
-:copyright: (c) 2009 - 2011 by Ask Solem.
+:copyright: (c) 2009 - 2012 by Ask Solem.
 :license: BSD, see LICENSE for more details.
 
 """
+from __future__ import absolute_import
+
 from itertools import count
 
-from kombu import entity
-from kombu import messaging
-from kombu.common import entry_to_queue
+from . import entity
+from . import messaging
+from .common import entry_to_queue
+
+__all__ = ["Publisher", "Consumer"]
 
 
 def _iterconsume(connection, consumer, no_ack=False, limit=None):
     consumer.consume(no_ack=no_ack)
-    for iteration in count(0):
+    for iteration in count(0):  # for infinity
         if limit and iteration >= limit:
             raise StopIteration
         yield connection.drain_events()
@@ -88,7 +92,6 @@ class Consumer(messaging.Consumer):
     def __init__(self, connection, queue=None, exchange=None,
             routing_key=None, exchange_type=None, durable=None,
             exclusive=None, auto_delete=None, **kwargs):
-        self.connection = connection
         self.backend = connection.channel()
 
         if durable is not None:
@@ -160,7 +163,7 @@ class Consumer(messaging.Consumer):
         return list(it)
 
     def iterqueue(self, limit=None, infinite=False):
-        for items_since_start in count():
+        for items_since_start in count():  # for infinity
             item = self.fetch()
             if (not infinite and item is None) or \
                     (limit and items_since_start >= limit):
@@ -171,9 +174,13 @@ class Consumer(messaging.Consumer):
 class ConsumerSet(messaging.Consumer):
 
     def __init__(self, connection, from_dict=None, consumers=None,
-            callbacks=None, **kwargs):
-        self.connection = connection
-        self.backend = connection.channel()
+            channel=None, **kwargs):
+        if channel:
+            self._provided_channel = True
+            self.backend = channel
+        else:
+            self._provided_channel = False
+            self.backend = connection.channel()
 
         queues = []
         if consumers:
@@ -204,4 +211,5 @@ class ConsumerSet(messaging.Consumer):
 
     def close(self):
         self.cancel()
-        self.channel.close()
+        if not self._provided_channel:
+            self.channel.close()
