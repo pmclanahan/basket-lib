@@ -49,3 +49,6 @@
 [submodule "src/pystatsd"]
 	path = src/pystatsd
 	url = git://github.com/jsocol/pystatsd.git
+[submodule "src/raven"]
+	path = src/raven
+	url = git://github.com/getsentry/raven-python.git
