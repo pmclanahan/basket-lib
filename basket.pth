@@ -29,6 +29,7 @@ packages/setuptools
 packages/six
 packages/suds
 packages/werkzeug
+packages/south
 src/check
 src/commonware
 src/django
