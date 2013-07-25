@@ -1,6 +1,6 @@
-Dependencies for `basket <http://github.com/abuchanan/basket>`.
+Dependencies for `basket <http://github.com/mozilla/basket>`.
 
-It goes something like this::
+It goes something (but only something) like this::
 
     pip install --no-install --build=vendor/packages --src=vendor/src -I -r requirements/dev.txt
     cd vendor/
