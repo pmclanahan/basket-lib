@@ -19,3 +19,12 @@
 [submodule "src/raven"]
 	path = src/raven
 	url = git://github.com/getsentry/raven-python.git
+[submodule "src/basket-client"]
+	path = src/basket-client
+	url = https://github.com/mozilla/basket-client.git
+[submodule "src/dnspython"]
+	path = src/dnspython
+	url = git@github.com:rthalley/dnspython
+[submodule "src/requests"]
+	path = src/requests
+	url = git@github.com:kennethreitz/requests
