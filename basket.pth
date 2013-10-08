@@ -15,12 +15,15 @@ packages/setuptools
 packages/six
 packages/suds
 packages/south
+src/basket-client
 src/django
 src/django-cache-machine
 src/django-fixture-magic
 src/django-mozilla-product-details
 src/django-piston
 src/django-statsd
+src/dnspython
+src/requests
 src/test-utils
 src/pystatsd
 src/raven
