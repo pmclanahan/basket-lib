@@ -27,4 +27,4 @@
 	url = git://github.com/rthalley/dnspython.git
 [submodule "src/requests"]
 	path = src/requests
-	url = git://github.com/kenneithreitz/requests.git
+	url = git://github.com/kennethreitz/requests.git
