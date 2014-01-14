@@ -28,3 +28,9 @@
 [submodule "src/requests"]
 	path = src/requests
 	url = git://github.com/kennethreitz/requests.git
+[submodule "src/flanker"]
+	path = src/flanker
+	url = git://github.com/pmclanahan/flanker.git
+[submodule "src/expiringdict"]
+	path = src/expiringdict
+	url = git://github.com/mailgun/expiringdict.git
