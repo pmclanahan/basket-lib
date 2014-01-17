@@ -19,6 +19,7 @@ packages/south
 src/basket-client
 src/django
 src/django-cache-machine
+src/django-cors-headers
 src/django-fixture-magic
 src/django-mozilla-product-details
 src/django-piston
