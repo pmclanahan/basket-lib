@@ -34,3 +34,6 @@
 [submodule "src/expiringdict"]
 	path = src/expiringdict
 	url = git://github.com/mailgun/expiringdict.git
+[submodule "src/django-cors-headers"]
+	path = src/django-cors-headers
+	url = git://github.com/ottoyiu/django-cors-headers.git
