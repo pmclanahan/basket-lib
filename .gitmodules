@@ -37,3 +37,6 @@
 [submodule "src/django-cors-headers"]
 	path = src/django-cors-headers
 	url = git://github.com/ottoyiu/django-cors-headers.git
+[submodule "src/django-sslify-admin"]
+	path = src/django-sslify-admin
+	url = git://github.com/return1/django-sslify-admin.git
