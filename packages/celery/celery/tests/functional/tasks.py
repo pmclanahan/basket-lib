@@ -2,24 +2,23 @@ from __future__ import absolute_import
 
 import time
 
-from celery.task import task
-from celery.task.sets import subtask
+from celery import task, signature
 
 
-@task
+@task()
 def add(x, y):
     return x + y
 
 
-@task
+@task()
 def add_cb(x, y, callback=None):
     result = x + y
     if callback:
-        return subtask(callback).apply_async(result)
+        return signature(callback).apply_async(result)
     return result
 
 
-@task
+@task()
 def sleeptask(i):
     time.sleep(i)
     return i

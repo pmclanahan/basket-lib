@@ -18,14 +18,13 @@ While this version is backward compatible with previous versions
 it is important that you read the following section.
 
 If you use Celery in combination with Django you must also
-read the `django-celery changelog`_ and upgrade to `django-celery 2.5`_.
+read the `django-celery changelog <djcelery:version-2.5.0>` and upgrade to `django-celery 2.5`_.
 
 This version is officially supported on CPython 2.5, 2.6, 2.7, 3.2 and 3.3,
 as well as PyPy and Jython.
 
 
 .. _`website`: http://celeryproject.org/
-.. _`django-celery changelog`: http://bit.ly/djcelery-25-changelog
 .. _`django-celery 2.5`: http://pypi.python.org/pypi/django-celery/
 
 .. contents::
@@ -50,11 +49,12 @@ this default or the default retry policy see
 :setting:`CELERY_TASK_PUBLISH_RETRY` and
 :setting:`CELERY_TASK_PUBLISH_RETRY_POLICY`.
 
-AMQP Result Backend: Exchange is no longer *auto delete*
---------------------------------------------------------
+Rabbit Result Backend: Exchange is no longer *auto delete*
+----------------------------------------------------------
 
-The exchange used for results used to have the *auto_delete* flag set,
-that could result in a race condition leading to an annoying warning.
+The exchange used for results in the Rabbit (AMQP) result backend
+used to have the *auto_delete* flag set, which could result in a
+race condition leading to an annoying warning.
 
 .. admonition:: For RabbitMQ users
 
@@ -62,14 +62,16 @@ that could result in a race condition leading to an annoying warning.
     to be removed.
 
     The :program:`camqadm` command can be used to delete the
-    previous exchange::
+    previous exchange:
 
-        $ camqadm exchange.delete celeryresults
+    .. code-block:: bash
+
+            $ camqadm exchange.delete celeryresults
 
     As an alternative to deleting the old exchange you can
     configure a new name for the exchange::
 
-        CELERY_RESULT_EXCHANGE = "celeryresults2"
+        CELERY_RESULT_EXCHANGE = 'celeryresults2'
 
     But you have to make sure that all clients and workers
     use this new setting, so they are updated to use the same
@@ -86,7 +88,7 @@ together:
 
     CELERYD_FORCE_EXECV = True
 
-This setting is recommended for all users using the processes pool,
+This setting is recommended for all users using the prefork pool,
 but especially users also using time limits or a max tasks per child
 setting.
 
@@ -152,7 +154,7 @@ Deprecations
 
 * The :mod:`celery.decorators` module has changed status
   from pending deprecation to deprecated, and is scheduled for removal
-  in version 3.0.  The ``celery.task`` module must be used instead.
+  in version 4.0.  The ``celery.task`` module must be used instead.
 
 .. _v250-news:
 
@@ -224,7 +226,7 @@ the Django ``runserver`` command.
 When auto-reload is enabled the worker starts an additional thread
 that watches for changes in the file system.  New modules are imported,
 and already imported modules are reloaded whenever a change is detected,
-and if the processes pool is used the child processes will finish the work
+and if the prefork pool is used the child processes will finish the work
 they are doing and exit, so that they can be replaced by fresh processes
 effectively reloading the code.
 
@@ -236,7 +238,9 @@ implementations:
     Used if the :mod:`pyinotify` library is installed.
     If you are running on Linux this is the recommended implementation,
     to install the :mod:`pyinotify` library you have to run the following
-    command::
+    command:
+
+    .. code-block:: bash
 
         $ pip install pyinotify
 
@@ -248,7 +252,9 @@ implementations:
     expensive.
 
 You can force an implementation by setting the :envvar:`CELERYD_FSNOTIFY`
-environment variable::
+environment variable:
+
+.. code-block:: bash
 
     $ env CELERYD_FSNOTIFY=stat celeryd -l info --autoreload
 
@@ -269,22 +275,22 @@ for the ``tasks.add`` task:
 
 .. code-block:: python
 
-    CELERY_ANNOTATIONS = {"tasks.add": {"rate_limit": "10/s"}}
+    CELERY_ANNOTATIONS = {'tasks.add': {'rate_limit': '10/s'}}
 
 or change the same for all tasks:
 
 .. code-block:: python
 
-   CELERY_ANNOTATIONS = {"*": {"rate_limit": "10/s"}}
+   CELERY_ANNOTATIONS = {'*': {'rate_limit': '10/s'}}
 
 You can change methods too, for example the ``on_failure`` handler:
 
 .. code-block:: python
 
     def my_on_failure(self, exc, task_id, args, kwargs, einfo):
-        print("Oh no! Task failed: %r" % (exc, ))
+        print('Oh no! Task failed: %r' % (exc, ))
 
-    CELERY_ANNOTATIONS = {"*": {"on_failure": my_on_failure}}
+    CELERY_ANNOTATIONS = {'*': {'on_failure': my_on_failure}}
 
 If you need more flexibility then you can also create objects
 that filter for tasks to annotate:
@@ -294,10 +300,10 @@ that filter for tasks to annotate:
     class MyAnnotate(object):
 
         def annotate(self, task):
-            if task.name.startswith("tasks."):
-                return {"rate_limit": "10/s"}
+            if task.name.startswith('tasks.'):
+                return {'rate_limit': '10/s'}
 
-    CELERY_ANNOTATIONS = (MyAnnotate(), {...})
+    CELERY_ANNOTATIONS = (MyAnnotate(), {…})
 
 ``current`` provides the currently executing task
 -------------------------------------------------
@@ -320,7 +326,7 @@ executing task.
             # retry in 10 seconds.
             current.retry(countdown=10, exc=exc)
 
-Previously you would have to type ``update_twitter_status.retry(...)``
+Previously you would have to type ``update_twitter_status.retry(…)``
 here, which can be annoying for long task names.
 
 .. note::
@@ -340,9 +346,9 @@ In Other News
 
     Contributed by Dan McGee.
 
-- Adds Chord support for the AMQP backend
+- Adds Chord support for the Rabbit result backend (amqp)
 
-    The AMQP backend can now use the fallback chord solution.
+    The Rabbit result backend can now use the fallback chord solution.
 
 - Sending :sig:`QUIT` to celeryd will now cause it cold terminate.
 
@@ -367,10 +373,12 @@ In Other News
 
     Contributed by Daniel Hepper.
 
-- celerybeat can now be configured on the command line like celeryd.
+- celerybeat can now be configured on the command-line like celeryd.
 
   Additional configuration must be added at the end of the argument list
-  followed by ``--``, for example::
+  followed by ``--``, for example:
+
+  .. code-block:: bash
 
     $ celerybeat -l info -- celerybeat.max_loop_interval=10.0
 
@@ -418,7 +426,9 @@ In Other News
     Note that this is experimental and you should have a backup
     of the data before proceeding.
 
-    **Examples**::
+    **Examples**:
+
+    .. code-block:: bash
 
         $ celeryctl migrate redis://localhost amqp://localhost
         $ celeryctl migrate amqp://localhost//v1 amqp://localhost//v2
@@ -462,7 +472,7 @@ In Other News
 
     Contributed by Chris Streeter.
 
-- User (tilde) is now expanded in command line arguments.
+- User (tilde) is now expanded in command-line arguments.
 
 - Can now configure CELERYCTL envvar in :file:`/etc/default/celeryd`.
 

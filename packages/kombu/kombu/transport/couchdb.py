@@ -4,34 +4,37 @@ kombu.transport.couchdb
 
 CouchDB transport.
 
-:copyright: (c) 2010 - 2012 by David Clymer.
+:copyright: (c) 2010 - 2013 by David Clymer.
 :license: BSD, see LICENSE for more details.
 
 """
 from __future__ import absolute_import
 
-from Queue import Empty
-
 import socket
-import couchdb
 
 from anyjson import loads, dumps
 
-from kombu.exceptions import StdChannelError
+from kombu.five import Empty
 from kombu.utils import uuid4
+from kombu.utils.encoding import bytes_to_str
 
 from . import virtual
 
-DEFAULT_PORT = 5984
-DEFAULT_DATABASE = "kombu_default"
+try:
+    import couchdb
+except ImportError:  # pragma: no cover
+    couchdb = None   # noqa
 
-__author__ = "David Clymer <david@zettazebra.com>"
+DEFAULT_PORT = 5984
+DEFAULT_DATABASE = 'kombu_default'
+
+__author__ = 'David Clymer <david@zettazebra.com>'
 
 
 def create_message_view(db):
     from couchdb import design
 
-    view = design.ViewDefinition("kombu", "messages", """
+    view = design.ViewDefinition('kombu', 'messages', """
         function (doc) {
           if (doc.queue && doc.payload)
             emit(doc.queue, doc);
@@ -58,7 +61,7 @@ class Channel(virtual.Channel):
 
         item = result.rows[0].value
         self.client.delete(item)
-        return loads(item["payload"])
+        return loads(bytes_to_str(item['payload']))
 
     def _purge(self, queue):
         result = self._query(queue)
@@ -72,8 +75,8 @@ class Channel(virtual.Channel):
     def _open(self):
         conninfo = self.connection.client
         dbname = conninfo.virtual_host
-        proto = conninfo.ssl and "https" or "http"
-        if not dbname or dbname == "/":
+        proto = conninfo.ssl and 'https' or 'http'
+        if not dbname or dbname == '/':
             dbname = DEFAULT_DATABASE
         port = conninfo.port or DEFAULT_PORT
         server = couchdb.Server('%s://%s:%s/' % (proto,
@@ -81,7 +84,9 @@ class Channel(virtual.Channel):
                                                  port))
         # Use username and password if avaliable
         try:
-            server.resource.credentials = (conninfo.userid, conninfo.password)
+            if conninfo.userid:
+                server.resource.credentials = (conninfo.userid,
+                                               conninfo.password)
         except AttributeError:
             pass
         try:
@@ -94,7 +99,7 @@ class Channel(virtual.Channel):
             # if the message view is not yet set up, we'll need it now.
             create_message_view(self.client)
             self.view_created = True
-        return self.client.view("kombu/messages", key=queue, **kwargs)
+        return self.client.view('kombu/messages', key=queue, **kwargs)
 
     @property
     def client(self):
@@ -108,13 +113,30 @@ class Transport(virtual.Transport):
 
     polling_interval = 1
     default_port = DEFAULT_PORT
-    connection_errors = (socket.error,
-                         couchdb.HTTPError,
-                         couchdb.ServerError,
-                         couchdb.Unauthorized)
-    channel_errors = (StdChannelError,
-                      couchdb.HTTPError,
-                      couchdb.ServerError,
-                      couchdb.PreconditionFailed,
-                      couchdb.ResourceConflict,
-                      couchdb.ResourceNotFound)
+    connection_errors = (
+        virtual.Transport.connection_errors + (
+            socket.error,
+            getattr(couchdb, 'HTTPError', None),
+            getattr(couchdb, 'ServerError', None),
+            getattr(couchdb, 'Unauthorized', None),
+        )
+    )
+    channel_errors = (
+        virtual.Transport.channel_errors + (
+            getattr(couchdb, 'HTTPError', None),
+            getattr(couchdb, 'ServerError', None),
+            getattr(couchdb, 'PreconditionFailed', None),
+            getattr(couchdb, 'ResourceConflict', None),
+            getattr(couchdb, 'ResourceNotFound', None),
+        )
+    )
+    driver_type = 'couchdb'
+    driver_name = 'couchdb'
+
+    def __init__(self, *args, **kwargs):
+        if couchdb is None:
+            raise ImportError('Missing couchdb library (pip install couchdb)')
+        super(Transport, self).__init__(*args, **kwargs)
+
+    def driver_version(self):
+        return couchdb.__version__

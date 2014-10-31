@@ -14,7 +14,7 @@ RabbitMQ is the default broker so it does not require any additional
 dependencies or initial configuration, other than the URL location of
 the broker instance you want to use::
 
-    >>> BROKER_URL = "amqp://guest:guest@localhost:5672//"
+    >>> BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
 For a description of broker URLs and a full list of the
 various broker configuration options available to Celery,
@@ -44,13 +44,19 @@ Setting up RabbitMQ
 -------------------
 
 To use celery we need to create a RabbitMQ user, a virtual host and
-allow that user access to that virtual host::
+allow that user access to that virtual host:
 
-    $ rabbitmqctl add_user myuser mypassword
+.. code-block:: bash
 
-    $ rabbitmqctl add_vhost myvhost
+    $ sudo rabbitmqctl add_user myuser mypassword
 
-    $ rabbitmqctl set_permissions -p myvhost myuser ".*" ".*" ".*"
+.. code-block:: bash
+
+    $ sudo rabbitmqctl add_vhost myvhost
+
+.. code-block:: bash
+
+    $ sudo rabbitmqctl set_permissions -p myvhost myuser ".*" ".*" ".*"
 
 See the RabbitMQ `Admin Guide`_ for more information about `access control`_.
 
@@ -63,43 +69,32 @@ See the RabbitMQ `Admin Guide`_ for more information about `access control`_.
 Installing RabbitMQ on OS X
 ---------------------------
 
-The easiest way to install RabbitMQ on Snow Leopard is using `Homebrew`_; the new
-and shiny package management system for OS X.
+The easiest way to install RabbitMQ on OS X is using `Homebrew`_ the new and
+shiny package management system for OS X.
 
-In this example we'll install Homebrew into :file:`/lol`, but you can
-choose whichever destination, even in your home directory if you want, as one of
-the strengths of Homebrew is that it's relocatable.
+First, install homebrew using the one-line command provided by the `Homebrew
+documentation`_:
 
-Homebrew is actually a `git`_ repository, so to install Homebrew, you first need to
-install git. Download and install from the disk image at
-http://code.google.com/p/git-osx-installer/downloads/list?can=3
+.. code-block:: bash
 
-When git is installed you can finally clone the repository, storing it at the
-:file:`/lol` location::
+    ruby -e "$(curl -fsSL https://raw.github.com/Homebrew/homebrew/go/install)"
 
-    $ git clone git://github.com/mxcl/homebrew /lol
+Finally, we can install rabbitmq using :program:`brew`:
 
-
-Brew comes with a simple utility called :program:`brew`, used to install, remove and
-query packages. To use it you first have to add it to :envvar:`PATH`, by
-adding the following line to the end of your :file:`~/.profile`::
-
-    export PATH="/lol/bin:/lol/sbin:$PATH"
-
-Save your profile and reload it::
-
-    $ source ~/.profile
-
-
-Finally, we can install rabbitmq using :program:`brew`::
+.. code-block:: bash
 
     $ brew install rabbitmq
 
-
 .. _`Homebrew`: http://github.com/mxcl/homebrew/
-.. _`git`: http://git-scm.org
+.. _`Homebrew documentation`: https://github.com/Homebrew/homebrew/wiki/Installation
 
 .. _rabbitmq-osx-system-hostname:
+
+After you have installed rabbitmq with brew you need to add the following to your path to be able to start and stop the broker. Add it to your .bash_profile or .profile
+
+.. code-block:: bash
+
+    `PATH=$PATH:/usr/local/sbin`
 
 Configuring the system host name
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -108,9 +103,11 @@ If you're using a DHCP server that is giving you a random host name, you need
 to permanently configure the host name. This is because RabbitMQ uses the host name
 to communicate with nodes.
 
-Use the :program:`scutil` command to permanently set your host name::
+Use the :program:`scutil` command to permanently set your host name:
 
-    sudo scutil --set HostName myhost.local
+.. code-block:: bash
+
+    $ sudo scutil --set HostName myhost.local
 
 Then add that host name to :file:`/etc/hosts` so it's possible to resolve it
 back into an IP address::
@@ -118,7 +115,9 @@ back into an IP address::
     127.0.0.1       localhost myhost myhost.local
 
 If you start the rabbitmq server, your rabbit node should now be `rabbit@myhost`,
-as verified by :program:`rabbitmqctl`::
+as verified by :program:`rabbitmqctl`:
+
+.. code-block:: bash
 
     $ sudo rabbitmqctl status
     Status of node rabbit@myhost ...
@@ -141,17 +140,23 @@ then RabbitMQ will try to use `rabbit@23`, which is an illegal host name.
 Starting/Stopping the RabbitMQ server
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-To start the server::
+To start the server:
+
+.. code-block:: bash
 
     $ sudo rabbitmq-server
 
 you can also run it in the background by adding the :option:`-detached` option
-(note: only one dash)::
+(note: only one dash):
+
+.. code-block:: bash
 
     $ sudo rabbitmq-server -detached
 
 Never use :program:`kill` to stop the RabbitMQ server, but rather use the
-:program:`rabbitmqctl` command::
+:program:`rabbitmqctl` command:
+
+.. code-block:: bash
 
     $ sudo rabbitmqctl stop
 

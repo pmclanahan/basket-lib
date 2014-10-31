@@ -5,295 +5,266 @@
 
     :class:`WorkController` can be used to instantiate in-process workers.
 
-    The worker consists of several components, all managed by boot-steps
-    (mod:`celery.abstract`).
-
-    :copyright: (c) 2009 - 2012 by Ask Solem.
-    :license: BSD, see LICENSE for more details.
+    The worker consists of several components, all managed by bootsteps
+    (mod:`celery.bootsteps`).
 
 """
 from __future__ import absolute_import
 
-import atexit
-import logging
-import socket
+import os
 import sys
-import threading
 import traceback
+try:
+    import resource
+except ImportError:  # pragma: no cover
+    resource = None  # noqa
 
-from kombu.utils.finalize import Finalize
+from billiard import cpu_count
+from billiard.util import Finalize
+from kombu.syn import detect_environment
 
-from .. import abstract
-from .. import concurrency as _concurrency
-from .. import registry
-from ..app import app_or_default
-from ..app.abstract import configurated, from_config
-from ..exceptions import SystemTerminate
-from ..log import SilenceRepeated
-from ..utils import noop, qualname, reload_from_cwd
+from celery import bootsteps
+from celery.bootsteps import RUN, TERMINATE
+from celery import concurrency as _concurrency
+from celery import platforms
+from celery import signals
+from celery.exceptions import (
+    ImproperlyConfigured, WorkerTerminate, TaskRevokedError,
+)
+from celery.five import string_t, values
+from celery.utils import default_nodename, worker_direct
+from celery.utils.imports import reload_from_cwd
+from celery.utils.log import mlevel, worker_logger as logger
+from celery.utils.threads import default_socket_timeout
 
 from . import state
-from .buckets import TaskBucket, FastQueue
 
-RUN = 0x1
-CLOSE = 0x2
-TERMINATE = 0x3
+__all__ = ['WorkController', 'default_nodename']
 
+#: Default socket timeout at shutdown.
+SHUTDOWN_SOCKET_TIMEOUT = 5.0
 
-class Namespace(abstract.Namespace):
-    """This is the boot-step namespace of the :class:`WorkController`.
+SELECT_UNKNOWN_QUEUE = """\
+Trying to select queue subset of {0!r}, but queue {1} is not
+defined in the CELERY_QUEUES setting.
 
-    It loads modules from :setting:`CELERYD_BOOT_STEPS`, and its
-    own set of built-in boot-step modules.
+If you want to automatically declare unknown queues you can
+enable the CELERY_CREATE_MISSING_QUEUES setting.
+"""
 
-    """
-    name = "worker"
-    builtin_boot_steps = ("celery.worker.autoscale",
-                          "celery.worker.autoreload",
-                          "celery.worker.consumer",
-                          "celery.worker.mediator")
-
-    def modules(self):
-        return (self.builtin_boot_steps
-              + self.app.conf.CELERYD_BOOT_STEPS)
+DESELECT_UNKNOWN_QUEUE = """\
+Trying to deselect queue subset of {0!r}, but queue {1} is not
+defined in the CELERY_QUEUES setting.
+"""
 
 
-class Pool(abstract.StartStopComponent):
-    """The pool component.
-
-    Describes how to initialize the worker pool, and starts and stops
-    the pool during worker startup/shutdown.
-
-    Adds attributes:
-
-        * autoscale
-        * pool
-        * max_concurrency
-        * min_concurrency
-
-    """
-    name = "worker.pool"
-    requires = ("queues", )
-
-    def __init__(self, w, autoscale=None, **kwargs):
-        w.autoscale = autoscale
-        w.pool = None
-        w.max_concurrency = None
-        w.min_concurrency = w.concurrency
-        if w.autoscale:
-            w.max_concurrency, w.min_concurrency = w.autoscale
-
-    def create(self, w):
-        pool = w.pool = self.instantiate(w.pool_cls, w.min_concurrency,
-                                logger=w.logger,
-                                initargs=(w.app, w.hostname),
-                                maxtasksperchild=w.max_tasks_per_child,
-                                timeout=w.task_time_limit,
-                                soft_timeout=w.task_soft_time_limit,
-                                putlocks=w.pool_putlocks,
-                                force_execv=w.force_execv)
-        return pool
+def str_to_list(s):
+    if isinstance(s, string_t):
+        return s.split(',')
+    return s
 
 
-class Beat(abstract.StartStopComponent):
-    """Component used to embed a celerybeat process.
-
-    This will only be enabled if the ``embed_clockservice``
-    argument is set.
-
-    """
-    name = "worker.beat"
-
-    def __init__(self, w, embed_clockservice=False, **kwargs):
-        self.enabled = w.embed_clockservice = embed_clockservice
-        w.beat = None
-
-    def create(self, w):
-        from ..beat import EmbeddedService
-        b = w.beat = EmbeddedService(app=w.app,
-                                     logger=w.logger,
-                                     schedule_filename=w.schedule_filename,
-                                     scheduler_cls=w.scheduler_cls)
-        return b
-
-
-class Queues(abstract.Component):
-    """This component initializes the internal queues
-    used by the worker."""
-    name = "worker.queues"
-
-    def create(self, w):
-        if not w.pool_cls.rlimit_safe:
-            w.disable_rate_limits = True
-        if w.disable_rate_limits:
-            w.ready_queue = FastQueue()
-            if not w.pool_cls.requires_mediator:
-                # just send task directly to pool, skip the mediator.
-                w.ready_queue.put = w.process_task
-        else:
-            w.ready_queue = TaskBucket(task_registry=registry.tasks)
-
-
-class Timers(abstract.Component):
-    """This component initializes the internal timers used by the worker."""
-    name = "worker.timers"
-    requires = ("pool", )
-
-    def create(self, w):
-        w.priority_timer = self.instantiate(w.pool.Timer)
-        if not w.eta_scheduler_cls:
-            # Default Timer is set by the pool, as e.g. eventlet
-            # needs a custom implementation.
-            w.eta_scheduler_cls = w.pool.Timer
-        w.scheduler = self.instantiate(w.eta_scheduler_cls,
-                                precision=w.eta_scheduler_precision,
-                                on_error=w.on_timer_error,
-                                on_tick=w.on_timer_tick)
-
-
-class StateDB(abstract.Component):
-    """This component sets up the workers state db if enabled."""
-    name = "worker.state-db"
-
-    def __init__(self, w, **kwargs):
-        self.enabled = w.state_db
-        w._persistence = None
-
-    def create(self, w):
-        w._persistence = state.Persistent(w.state_db)
-        atexit.register(w._persistence.save)
-
-
-class WorkController(configurated):
+class WorkController(object):
     """Unmanaged worker instance."""
-    RUN = RUN
-    CLOSE = CLOSE
-    TERMINATE = TERMINATE
+    app = None
 
-    concurrency = from_config()
-    loglevel = logging.ERROR
-    logfile = from_config("log_file")
-    send_events = from_config()
-    pool_cls = from_config("pool")
-    consumer_cls = from_config("consumer")
-    mediator_cls = from_config("mediator")
-    eta_scheduler_cls = from_config("eta_scheduler")
-    eta_scheduler_precision = from_config()
-    autoscaler_cls = from_config("autoscaler")
-    autoreloader_cls = from_config("autoreloader")
-    schedule_filename = from_config()
-    scheduler_cls = from_config("celerybeat_scheduler")
-    task_time_limit = from_config()
-    task_soft_time_limit = from_config()
-    max_tasks_per_child = from_config()
-    pool_putlocks = from_config()
-    force_execv = from_config()
-    prefetch_multiplier = from_config()
-    state_db = from_config()
-    disable_rate_limits = from_config()
+    pidlock = None
+    blueprint = None
+    pool = None
+    semaphore = None
 
-    _state = None
-    _running = 0
+    class Blueprint(bootsteps.Blueprint):
+        """Worker bootstep blueprint."""
+        name = 'Worker'
+        default_steps = set([
+            'celery.worker.components:Hub',
+            'celery.worker.components:Queues',
+            'celery.worker.components:Pool',
+            'celery.worker.components:Beat',
+            'celery.worker.components:Timer',
+            'celery.worker.components:StateDB',
+            'celery.worker.components:Consumer',
+            'celery.worker.autoscale:WorkerComponent',
+            'celery.worker.autoreload:WorkerComponent',
 
-    def __init__(self, loglevel=None, hostname=None, logger=None,
-            ready_callback=noop,
-            queues=None, app=None, **kwargs):
-        self.app = app_or_default(app)
-        self._shutdown_complete = threading.Event()
-        self.setup_defaults(kwargs, namespace="celeryd")
-        self.app.select_queues(queues)  # select queues subset.
+        ])
+
+    def __init__(self, app=None, hostname=None, **kwargs):
+        self.app = app or self.app
+        self.hostname = default_nodename(hostname)
+        self.app.loader.init_worker()
+        self.on_before_init(**kwargs)
+        self.setup_defaults(**kwargs)
+        self.on_after_init(**kwargs)
+
+        self.setup_instance(**self.prepare_args(**kwargs))
+        self._finalize = [
+            Finalize(self, self._send_worker_shutdown, exitpriority=10),
+        ]
+
+    def setup_instance(self, queues=None, ready_callback=None, pidfile=None,
+                       include=None, use_eventloop=None, exclude_queues=None,
+                       **kwargs):
+        self.pidfile = pidfile
+        self.setup_queues(queues, exclude_queues)
+        self.setup_includes(str_to_list(include))
+
+        # Set default concurrency
+        if not self.concurrency:
+            try:
+                self.concurrency = cpu_count()
+            except NotImplementedError:
+                self.concurrency = 2
 
         # Options
-        self.loglevel = loglevel or self.loglevel
-        self.logger = self.app.log.get_default_logger()
-        self.hostname = hostname or socket.gethostname()
-        self.ready_callback = ready_callback
-        self.timer_debug = SilenceRepeated(self.logger.debug,
-                                           max_iterations=10)
-        self._finalize = Finalize(self, self.stop, exitpriority=1)
-        self._finalize_db = None
+        self.loglevel = mlevel(self.loglevel)
+        self.ready_callback = ready_callback or self.on_consumer_ready
 
-        # Initialize boot steps
+        # this connection is not established, only used for params
+        self._conninfo = self.app.connection()
+        self.use_eventloop = (
+            self.should_use_eventloop() if use_eventloop is None
+            else use_eventloop
+        )
+        self.options = kwargs
+
+        signals.worker_init.send(sender=self)
+
+        # Initialize bootsteps
         self.pool_cls = _concurrency.get_implementation(self.pool_cls)
-        self.components = []
-        self.namespace = Namespace(app=self.app,
-                                   logger=self.logger).apply(self, **kwargs)
+        self.steps = []
+        self.on_init_blueprint()
+        self.blueprint = self.Blueprint(app=self.app,
+                                        on_start=self.on_start,
+                                        on_close=self.on_close,
+                                        on_stopped=self.on_stopped)
+        self.blueprint.apply(self, **kwargs)
+
+    def on_init_blueprint(self):
+        pass
+
+    def on_before_init(self, **kwargs):
+        pass
+
+    def on_after_init(self, **kwargs):
+        pass
+
+    def on_start(self):
+        if self.pidfile:
+            self.pidlock = platforms.create_pidlock(self.pidfile)
+
+    def on_consumer_ready(self, consumer):
+        pass
+
+    def on_close(self):
+        self.app.loader.shutdown_worker()
+
+    def on_stopped(self):
+        self.timer.stop()
+        self.consumer.shutdown()
+
+        if self.pidlock:
+            self.pidlock.release()
+
+    def setup_queues(self, include, exclude=None):
+        include = str_to_list(include)
+        exclude = str_to_list(exclude)
+        try:
+            self.app.amqp.queues.select(include)
+        except KeyError as exc:
+            raise ImproperlyConfigured(
+                SELECT_UNKNOWN_QUEUE.format(include, exc))
+        try:
+            self.app.amqp.queues.deselect(exclude)
+        except KeyError as exc:
+            raise ImproperlyConfigured(
+                DESELECT_UNKNOWN_QUEUE.format(exclude, exc))
+        if self.app.conf.CELERY_WORKER_DIRECT:
+            self.app.amqp.queues.select_add(worker_direct(self.hostname))
+
+    def setup_includes(self, includes):
+        # Update celery_include to have all known task modules, so that we
+        # ensure all task modules are imported in case an execv happens.
+        prev = tuple(self.app.conf.CELERY_INCLUDE)
+        if includes:
+            prev += tuple(includes)
+            [self.app.loader.import_task_module(m) for m in includes]
+        self.include = includes
+        task_modules = set(task.__class__.__module__
+                           for task in values(self.app.tasks))
+        self.app.conf.CELERY_INCLUDE = tuple(set(prev) | task_modules)
+
+    def prepare_args(self, **kwargs):
+        return kwargs
+
+    def _send_worker_shutdown(self):
+        signals.worker_shutdown.send(sender=self)
 
     def start(self):
         """Starts the workers main loop."""
-        self._state = self.RUN
-
         try:
-            for i, component in enumerate(self.components):
-                self.logger.debug("Starting %s...", qualname(component))
-                self._running = i + 1
-                component.start()
-                self.logger.debug("%s OK!", qualname(component))
-        except SystemTerminate:
+            self.blueprint.start(self)
+        except WorkerTerminate:
             self.terminate()
-        except Exception, exc:
-            self.logger.error("Unrecoverable error: %r", exc,
-                              exc_info=True)
+        except Exception as exc:
+            logger.error('Unrecoverable error: %r', exc, exc_info=True)
             self.stop()
         except (KeyboardInterrupt, SystemExit):
             self.stop()
 
-        # Will only get here if running green,
-        # makes sure all greenthreads have exited.
-        self._shutdown_complete.wait()
+    def register_with_event_loop(self, hub):
+        self.blueprint.send_all(
+            self, 'register_with_event_loop', args=(hub, ),
+            description='hub.register',
+        )
 
-    def process_task(self, request):
+    def _process_task_sem(self, req):
+        return self._quick_acquire(self._process_task, req)
+
+    def _process_task(self, req):
         """Process task by sending it to the pool of workers."""
         try:
-            request.task.execute(request, self.pool,
-                                 self.loglevel, self.logfile)
-        except Exception, exc:
-            self.logger.critical("Internal error %s: %s\n%s",
-                                 exc.__class__, exc, traceback.format_exc(),
-                                 exc_info=True)
-        except SystemTerminate:
-            self.terminate()
-            raise
-        except BaseException, exc:
-            self.stop()
-            raise exc
+            req.execute_using_pool(self.pool)
+        except TaskRevokedError:
+            try:
+                self._quick_release()   # Issue 877
+            except AttributeError:
+                pass
+        except Exception as exc:
+            logger.critical('Internal error: %r\n%s',
+                            exc, traceback.format_exc(), exc_info=True)
+
+    def signal_consumer_close(self):
+        try:
+            self.consumer.close()
+        except AttributeError:
+            pass
+
+    def should_use_eventloop(self):
+        return (detect_environment() == 'default' and
+                self._conninfo.is_evented and not self.app.IS_WINDOWS)
 
     def stop(self, in_sighandler=False):
         """Graceful shutdown of the worker server."""
-        if not in_sighandler or self.pool.signal_safe:
-            self._shutdown(warm=True)
+        if self.blueprint.state == RUN:
+            self.signal_consumer_close()
+            if not in_sighandler or self.pool.signal_safe:
+                self._shutdown(warm=True)
 
     def terminate(self, in_sighandler=False):
         """Not so graceful shutdown of the worker server."""
-        if not in_sighandler or self.pool.signal_safe:
-            self._shutdown(warm=False)
+        if self.blueprint.state != TERMINATE:
+            self.signal_consumer_close()
+            if not in_sighandler or self.pool.signal_safe:
+                self._shutdown(warm=False)
 
     def _shutdown(self, warm=True):
-        what = "Stopping" if warm else "Terminating"
-
-        if self._state in (self.CLOSE, self.TERMINATE):
-            return
-
-        if self._state != self.RUN or self._running != len(self.components):
-            # Not fully started, can safely exit.
-            self._state = self.TERMINATE
-            self._shutdown_complete.set()
-            return
-
-        self._state = self.CLOSE
-
-        for component in reversed(self.components):
-            self.logger.debug("%s %s...", what, qualname(component))
-            stop = component.stop
-            if not warm:
-                stop = getattr(component, "terminate", None) or stop
-            stop()
-
-        self.priority_timer.stop()
-        self.consumer.close_connection()
-
-        self._state = self.TERMINATE
-        self._shutdown_complete.set()
+        # if blueprint does not exist it means that we had an
+        # error before the bootsteps could be initialized.
+        if self.blueprint is not None:
+            with default_socket_timeout(SHUTDOWN_SOCKET_TIMEOUT):  # Issue 975
+                self.blueprint.stop(self, terminate=not warm)
+                self.blueprint.join()
 
     def reload(self, modules=None, reload=False, reloader=None):
         modules = self.app.loader.task_modules if modules is None else modules
@@ -301,19 +272,120 @@ class WorkController(configurated):
 
         for module in set(modules or ()):
             if module not in sys.modules:
-                self.logger.debug("importing module %s", module)
+                logger.debug('importing module %s', module)
                 imp(module)
             elif reload:
-                self.logger.debug("reloading module %s", module)
+                logger.debug('reloading module %s', module)
                 reload_from_cwd(sys.modules[module], reloader)
-        self.pool.restart()
 
-    def on_timer_error(self, einfo):
-        self.logger.error("Timer error: %r", einfo[1], exc_info=einfo)
+        if self.consumer:
+            self.consumer.update_strategies()
+            self.consumer.reset_rate_limits()
+        try:
+            self.pool.restart()
+        except NotImplementedError:
+            pass
 
-    def on_timer_tick(self, delay):
-        self.timer_debug("Scheduler wake-up! Next eta %s secs.", delay)
+    def info(self):
+        return {'total': self.state.total_count,
+                'pid': os.getpid(),
+                'clock': str(self.app.clock)}
+
+    def rusage(self):
+        if resource is None:
+            raise NotImplementedError('rusage not supported by this platform')
+        s = resource.getrusage(resource.RUSAGE_SELF)
+        return {
+            'utime': s.ru_utime,
+            'stime': s.ru_stime,
+            'maxrss': s.ru_maxrss,
+            'ixrss': s.ru_ixrss,
+            'idrss': s.ru_idrss,
+            'isrss': s.ru_isrss,
+            'minflt': s.ru_minflt,
+            'majflt': s.ru_majflt,
+            'nswap': s.ru_nswap,
+            'inblock': s.ru_inblock,
+            'oublock': s.ru_oublock,
+            'msgsnd': s.ru_msgsnd,
+            'msgrcv': s.ru_msgrcv,
+            'nsignals': s.ru_nsignals,
+            'nvcsw': s.ru_nvcsw,
+            'nivcsw': s.ru_nivcsw,
+        }
+
+    def stats(self):
+        info = self.info()
+        info.update(self.blueprint.info(self))
+        info.update(self.consumer.blueprint.info(self.consumer))
+        try:
+            info['rusage'] = self.rusage()
+        except NotImplementedError:
+            info['rusage'] = 'N/A'
+        return info
+
+    def __repr__(self):
+        return '<Worker: {self.hostname} ({state})>'.format(
+            self=self, state=self.blueprint.human_state(),
+        )
+
+    def __str__(self):
+        return self.hostname
 
     @property
     def state(self):
         return state
+
+    def setup_defaults(self, concurrency=None, loglevel=None, logfile=None,
+                       send_events=None, pool_cls=None, consumer_cls=None,
+                       timer_cls=None, timer_precision=None,
+                       autoscaler_cls=None, autoreloader_cls=None,
+                       pool_putlocks=None, pool_restarts=None,
+                       force_execv=None, state_db=None,
+                       schedule_filename=None, scheduler_cls=None,
+                       task_time_limit=None, task_soft_time_limit=None,
+                       max_tasks_per_child=None, prefetch_multiplier=None,
+                       disable_rate_limits=None, worker_lost_wait=None, **_kw):
+        self.concurrency = self._getopt('concurrency', concurrency)
+        self.loglevel = self._getopt('log_level', loglevel)
+        self.logfile = self._getopt('log_file', logfile)
+        self.send_events = self._getopt('send_events', send_events)
+        self.pool_cls = self._getopt('pool', pool_cls)
+        self.consumer_cls = self._getopt('consumer', consumer_cls)
+        self.timer_cls = self._getopt('timer', timer_cls)
+        self.timer_precision = self._getopt('timer_precision', timer_precision)
+        self.autoscaler_cls = self._getopt('autoscaler', autoscaler_cls)
+        self.autoreloader_cls = self._getopt('autoreloader', autoreloader_cls)
+        self.pool_putlocks = self._getopt('pool_putlocks', pool_putlocks)
+        self.pool_restarts = self._getopt('pool_restarts', pool_restarts)
+        self.force_execv = self._getopt('force_execv', force_execv)
+        self.state_db = self._getopt('state_db', state_db)
+        self.schedule_filename = self._getopt(
+            'schedule_filename', schedule_filename,
+        )
+        self.scheduler_cls = self._getopt(
+            'celerybeat_scheduler', scheduler_cls,
+        )
+        self.task_time_limit = self._getopt(
+            'task_time_limit', task_time_limit,
+        )
+        self.task_soft_time_limit = self._getopt(
+            'task_soft_time_limit', task_soft_time_limit,
+        )
+        self.max_tasks_per_child = self._getopt(
+            'max_tasks_per_child', max_tasks_per_child,
+        )
+        self.prefetch_multiplier = int(self._getopt(
+            'prefetch_multiplier', prefetch_multiplier,
+        ))
+        self.disable_rate_limits = self._getopt(
+            'disable_rate_limits', disable_rate_limits,
+        )
+        self.worker_lost_wait = self._getopt(
+            'worker_lost_wait', worker_lost_wait,
+        )
+
+    def _getopt(self, key, value):
+        if value is not None:
+            return value
+        return self.app.conf.find_value_for_key(key, namespace='celeryd')

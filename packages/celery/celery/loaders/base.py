@@ -5,35 +5,40 @@
 
     Loader base class.
 
-    :copyright: (c) 2009 - 2012 by Ask Solem.
-    :license: BSD, see LICENSE for more details.
-
 """
 from __future__ import absolute_import
 
+import anyjson
+import imp as _imp
 import importlib
 import os
 import re
-import traceback
-import warnings
+import sys
 
-from anyjson import deserialize
 from datetime import datetime
 
-from ..datastructures import DictAttribute
-from ..exceptions import ImproperlyConfigured
-from ..utils import (cached_property, get_cls_by_name,
-                     import_from_cwd as _import_from_cwd)
-from ..utils.functional import maybe_list
-from ..utils.encoding import safe_str
+from kombu.utils import cached_property
+from kombu.utils.encoding import safe_str
 
-BUILTIN_MODULES = frozenset(["celery.task"])
+from celery import signals
+from celery.datastructures import DictAttribute, force_mapping
+from celery.five import reraise, string_t
+from celery.utils.functional import maybe_list
+from celery.utils.imports import (
+    import_from_cwd, symbol_by_name, NotAPackage, find_module,
+)
 
-ERROR_ENVVAR_NOT_SET = (
-"""The environment variable %r is not set,
-and as such the configuration could not be loaded.
-Please set this variable and make it point to
-a configuration module.""")
+__all__ = ['BaseLoader']
+
+_RACE_PROTECTION = False
+CONFIG_INVALID_NAME = """\
+Error: Module '{module}' doesn't exist, or it's not a valid \
+Python module name.
+"""
+
+CONFIG_WITH_SUFFIX = CONFIG_INVALID_NAME + """\
+Did you mean '{suggest}'?
+"""
 
 
 class BaseLoader(object):
@@ -49,20 +54,21 @@ class BaseLoader(object):
         * What happens when the worker starts?
             See :meth:`on_worker_init`.
 
+        * What happens when the worker shuts down?
+            See :meth:`on_worker_shutdown`.
+
         * What modules are imported to find tasks?
 
     """
-    builtin_modules = BUILTIN_MODULES
+    builtin_modules = frozenset()
     configured = False
-    error_envvar_not_set = ERROR_ENVVAR_NOT_SET
     override_backends = {}
     worker_initialized = False
 
     _conf = None
 
-    def __init__(self, app=None, **kwargs):
-        from ..app import app_or_default
-        self.app = app_or_default(app)
+    def __init__(self, app, **kwargs):
+        self.app = app
         self.task_modules = set()
 
     def now(self, utc=True):
@@ -79,8 +85,13 @@ class BaseLoader(object):
         pass
 
     def on_worker_init(self):
-        """This method is called when the worker (:program:`celeryd`)
+        """This method is called when the worker (:program:`celery worker`)
         starts."""
+        pass
+
+    def on_worker_shutdown(self):
+        """This method is called when the worker (:program:`celery worker`)
+        shuts down."""
         pass
 
     def on_worker_process_init(self):
@@ -95,67 +106,96 @@ class BaseLoader(object):
         return importlib.import_module(module, package=package)
 
     def import_from_cwd(self, module, imp=None, package=None):
-        return _import_from_cwd(module,
-                self.import_module if imp is None else imp,
-                package=package)
+        return import_from_cwd(
+            module,
+            self.import_module if imp is None else imp,
+            package=package,
+        )
 
     def import_default_modules(self):
-        imports = set(maybe_list(self.conf.get("CELERY_IMPORTS") or ()))
-        return [self.import_task_module(module)
-                    for module in imports | self.builtin_modules]
+        signals.import_modules.send(sender=self.app)
+        return [
+            self.import_task_module(m) for m in (
+                tuple(self.builtin_modules) +
+                tuple(maybe_list(self.app.conf.CELERY_IMPORTS)) +
+                tuple(maybe_list(self.app.conf.CELERY_INCLUDE))
+            )
+        ]
 
     def init_worker(self):
         if not self.worker_initialized:
             self.worker_initialized = True
+            self.import_default_modules()
             self.on_worker_init()
+
+    def shutdown_worker(self):
+        self.on_worker_shutdown()
 
     def init_worker_process(self):
         self.on_worker_process_init()
 
-    def config_from_envvar(self, variable_name, silent=False):
-        module_name = os.environ.get(variable_name)
-        if not module_name:
-            if silent:
-                return False
-            raise ImproperlyConfigured(self.error_envvar_not_set % module_name)
-        return self.config_from_object(module_name, silent=silent)
-
     def config_from_object(self, obj, silent=False):
-        if isinstance(obj, basestring):
+        if isinstance(obj, string_t):
             try:
-                if "." in obj:
-                    obj = get_cls_by_name(obj, imp=self.import_from_cwd)
-                else:
-                    obj = self.import_from_cwd(obj)
+                obj = self._smart_import(obj, imp=self.import_from_cwd)
             except (ImportError, AttributeError):
                 if silent:
                     return False
                 raise
-        if not hasattr(obj, "__getitem__"):
-            obj = DictAttribute(obj)
-        self._conf = obj
+        self._conf = force_mapping(obj)
         return True
 
-    def cmdline_config_parser(self, args, namespace="celery",
-                re_type=re.compile(r"\((\w+)\)"),
-                extra_types={"json": deserialize},
-                override_types={"tuple": "json",
-                                "list": "json",
-                                "dict": "json"}):
-        from ..app.defaults import Option, NAMESPACES
+    def _smart_import(self, path, imp=None):
+        imp = self.import_module if imp is None else imp
+        if ':' in path:
+            # Path includes attribute so can just jump here.
+            # e.g. ``os.path:abspath``.
+            return symbol_by_name(path, imp=imp)
+
+        # Not sure if path is just a module name or if it includes an
+        # attribute name (e.g. ``os.path``, vs, ``os.path.abspath``
+        try:
+            return imp(path)
+        except ImportError:
+            # Not a module name, so try module + attribute.
+            return symbol_by_name(path, imp=imp)
+
+    def _import_config_module(self, name):
+        try:
+            self.find_module(name)
+        except NotAPackage:
+            if name.endswith('.py'):
+                reraise(NotAPackage, NotAPackage(CONFIG_WITH_SUFFIX.format(
+                    module=name, suggest=name[:-3])), sys.exc_info()[2])
+            reraise(NotAPackage, NotAPackage(CONFIG_INVALID_NAME.format(
+                module=name)), sys.exc_info()[2])
+        else:
+            return self.import_from_cwd(name)
+
+    def find_module(self, module):
+        return find_module(module)
+
+    def cmdline_config_parser(
+            self, args, namespace='celery',
+            re_type=re.compile(r'\((\w+)\)'),
+            extra_types={'json': anyjson.loads},
+            override_types={'tuple': 'json',
+                            'list': 'json',
+                            'dict': 'json'}):
+        from celery.app.defaults import Option, NAMESPACES
         namespace = namespace.upper()
         typemap = dict(Option.typemap, **extra_types)
 
         def getarg(arg):
             """Parse a single configuration definition from
-            the command line."""
+            the command-line."""
 
-            ## find key/value
+            # ## find key/value
             # ns.key=value|ns_key=value (case insensitive)
             key, value = arg.split('=', 1)
-            key = key.upper().replace(".", "_")
+            key = key.upper().replace('.', '_')
 
-            ## find namespace.
+            # ## find namespace.
             # .key=value|_key=value expands to default namespace.
             if key[0] == '_':
                 ns, key = namespace, key[1:]
@@ -163,7 +203,7 @@ class BaseLoader(object):
                 # find namespace part of key
                 ns, key = key.split('_', 1)
 
-            ns_key = (ns and ns + "_" or "") + key
+            ns_key = (ns and ns + '_' or '') + key
 
             # (type)value makes cast to custom type.
             cast = re_type.match(value)
@@ -175,33 +215,40 @@ class BaseLoader(object):
             else:
                 try:
                     value = NAMESPACES[ns][key].to_python(value)
-                except ValueError, exc:
+                except ValueError as exc:
                     # display key name in error message.
-                    raise ValueError("%r: %s" % (ns_key, exc))
+                    raise ValueError('{0!r}: {1}'.format(ns_key, exc))
             return ns_key, value
-
-        return dict(map(getarg, args))
+        return dict(getarg(arg) for arg in args)
 
     def mail_admins(self, subject, body, fail_silently=False,
-            sender=None, to=None, host=None, port=None,
-            user=None, password=None, timeout=None,
-            use_ssl=False, use_tls=False):
+                    sender=None, to=None, host=None, port=None,
+                    user=None, password=None, timeout=None,
+                    use_ssl=False, use_tls=False):
+        message = self.mail.Message(sender=sender, to=to,
+                                    subject=safe_str(subject),
+                                    body=safe_str(body))
+        mailer = self.mail.Mailer(host=host, port=port,
+                                  user=user, password=password,
+                                  timeout=timeout, use_ssl=use_ssl,
+                                  use_tls=use_tls)
+        mailer.send(message, fail_silently=fail_silently)
+
+    def read_configuration(self, env='CELERY_CONFIG_MODULE'):
         try:
-            message = self.mail.Message(sender=sender, to=to,
-                                        subject=safe_str(subject),
-                                        body=safe_str(body))
-            mailer = self.mail.Mailer(host=host, port=port,
-                                      user=user, password=password,
-                                      timeout=timeout, use_ssl=use_ssl,
-                                      use_tls=use_tls)
-            mailer.send(message)
-        except Exception, exc:
-            if not fail_silently:
-                raise
-            warnings.warn(self.mail.SendmailWarning(
-                "Mail could not be sent: %r %r\n%r" % (
-                    exc, {"To": to, "Subject": subject},
-                    traceback.format_stack())))
+            custom_config = os.environ[env]
+        except KeyError:
+            pass
+        else:
+            if custom_config:
+                usercfg = self._import_config_module(custom_config)
+                return DictAttribute(usercfg)
+        return {}
+
+    def autodiscover_tasks(self, packages, related_name='tasks'):
+        self.task_modules.update(
+            mod.__name__ for mod in autodiscover_tasks(packages or (),
+                                                       related_name) if mod)
 
     @property
     def conf(self):
@@ -212,4 +259,40 @@ class BaseLoader(object):
 
     @cached_property
     def mail(self):
-        return self.import_module("celery.utils.mail")
+        return self.import_module('celery.utils.mail')
+
+
+def autodiscover_tasks(packages, related_name='tasks'):
+    global _RACE_PROTECTION
+
+    if _RACE_PROTECTION:
+        return ()
+    _RACE_PROTECTION = True
+    try:
+        return [find_related_module(pkg, related_name) for pkg in packages]
+    finally:
+        _RACE_PROTECTION = False
+
+
+def find_related_module(package, related_name):
+    """Given a package name and a module name, tries to find that
+    module."""
+
+    # Django 1.7 allows for speciying a class name in INSTALLED_APPS.
+    # (Issue #2248).
+    try:
+        importlib.import_module(package)
+    except ImportError:
+        package, _, _ = package.rpartition('.')
+
+    try:
+        pkg_path = importlib.import_module(package).__path__
+    except AttributeError:
+        return
+
+    try:
+        _imp.find_module(related_name, pkg_path)
+    except ImportError:
+        return
+
+    return importlib.import_module('{0}.{1}'.format(package, related_name))

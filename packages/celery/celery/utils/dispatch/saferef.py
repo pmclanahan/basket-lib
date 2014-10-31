@@ -7,11 +7,16 @@ aren't handled by the core weakref module).
 """
 from __future__ import absolute_import
 
-import weakref
+import sys
 import traceback
+import weakref
+
+__all__ = ['safe_ref']
+
+PY3 = sys.version_info[0] == 3
 
 
-def safe_ref(target, on_delete=None):
+def safe_ref(target, on_delete=None):  # pragma: no cover
     """Return a *safe* weak reference to a callable target
 
     :param target: the object to be weakly referenced, if it's a
@@ -23,12 +28,12 @@ def safe_ref(target, on_delete=None):
         goes out of scope with the reference object, (either a
         :class:`weakref.ref` or a :class:`BoundMethodWeakref`) as argument.
     """
-    if getattr(target, "im_self", None) is not None:
+    if getattr(target, '__self__', None) is not None:
         # Turn a bound method into a BoundMethodWeakref instance.
         # Keep track of these instances for lookup by disconnect().
-        assert hasattr(target, 'im_func'), \
-            """safe_ref target %r has im_self, but no im_func, " \
-            "don't know how to create reference""" % (target, )
+        assert hasattr(target, '__func__'), \
+            """safe_ref target {0!r} has __self__, but no __func__: \
+            don't know how to create reference""".format(target)
         return get_bound_method_weakref(target=target,
                                         on_delete=on_delete)
     if callable(on_delete):
@@ -37,7 +42,7 @@ def safe_ref(target, on_delete=None):
         return weakref.ref(target)
 
 
-class BoundMethodWeakref(object):
+class BoundMethodWeakref(object):  # pragma: no cover
     """'Safe' and reusable weak references to instance methods.
 
     BoundMethodWeakref objects provide a mechanism for
@@ -66,7 +71,7 @@ class BoundMethodWeakref(object):
 
         weak reference to the target object
 
-    .. attribute:: weak_func
+    .. attribute:: weak_fun
 
         weak reference to the target function
 
@@ -112,10 +117,10 @@ class BoundMethodWeakref(object):
         """Return a weak-reference-like instance for a bound method
 
         :param target: the instance-method target for the weak
-            reference, must have `im_self` and `im_func` attributes
+            reference, must have `__self__` and `__func__` attributes
             and be reconstructable via::
 
-                target.im_func.__get__(target.im_self)
+                target.__func__.__get__(target.__self__)
 
             which is true of built-in instance methods.
 
@@ -138,19 +143,19 @@ class BoundMethodWeakref(object):
                 try:
                     if callable(function):
                         function(self)
-                except Exception, exc:
+                except Exception as exc:
                     try:
                         traceback.print_exc()
                     except AttributeError:
-                        print("Exception during saferef %s cleanup function "
-                              "%s: %s" % (self, function, exc))
+                        print('Exception during saferef {0} cleanup function '
+                              '{1}: {2}'.format(self, function, exc))
 
         self.deletion_methods = [on_delete]
         self.key = self.calculate_key(target)
-        self.weak_self = weakref.ref(target.im_self, remove)
-        self.weak_func = weakref.ref(target.im_func, remove)
-        self.self_name = str(target.im_self)
-        self.func_name = str(target.im_func.__name__)
+        self.weak_self = weakref.ref(target.__self__, remove)
+        self.weak_fun = weakref.ref(target.__func__, remove)
+        self.self_name = str(target.__self__)
+        self.fun_name = str(target.__func__.__name__)
 
     def calculate_key(cls, target):
         """Calculate the reference key for this reference
@@ -158,34 +163,36 @@ class BoundMethodWeakref(object):
         Currently this is a two-tuple of the `id()`'s of the
         target object and the target function respectively.
         """
-        return id(target.im_self), id(target.im_func)
+        return id(target.__self__), id(target.__func__)
     calculate_key = classmethod(calculate_key)
 
     def __str__(self):
         """Give a friendly representation of the object"""
-        return """%s( %s.%s )""" % (
-            self.__class__.__name__,
+        return '{0}( {1}.{2} )'.format(
+            type(self).__name__,
             self.self_name,
-            self.func_name,
+            self.fun_name,
         )
 
     __repr__ = __str__
 
-    def __nonzero__(self):
+    def __bool__(self):
         """Whether we are still a valid reference"""
         return self() is not None
+    __nonzero__ = __bool__  # py2
 
-    def __cmp__(self, other):
-        """Compare with another reference"""
-        if not isinstance(other, self.__class__):
-            return cmp(self.__class__, type(other))
-        return cmp(self.key, other.key)
+    if not PY3:
+        def __cmp__(self, other):
+            """Compare with another reference"""
+            if not isinstance(other, self.__class__):
+                return cmp(self.__class__, type(other))  # noqa
+            return cmp(self.key, other.key)              # noqa
 
     def __call__(self):
         """Return a strong reference to the bound method
 
         If the target cannot be retrieved, then will
-        return None, otherwise returns a bound instance
+        return None, otherwise return a bound instance
         method for our object and function.
 
         Note:
@@ -194,12 +201,12 @@ class BoundMethodWeakref(object):
         """
         target = self.weak_self()
         if target is not None:
-            function = self.weak_func()
+            function = self.weak_fun()
             if function is not None:
                 return function.__get__(target)
 
 
-class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
+class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):  # pragma: no cover
     """A specialized :class:`BoundMethodWeakref`, for platforms where
     instance methods are not descriptors.
 
@@ -212,7 +219,7 @@ class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
         ...     pass
 
         >>> def foo(self):
-        ...     return "foo"
+        ...     return 'foo'
         >>> A.bar = foo
 
     But this shouldn't be a common use case. So, on platforms where methods
@@ -224,10 +231,10 @@ class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
         """Return a weak-reference-like instance for a bound method
 
         :param target: the instance-method target for the weak
-            reference, must have `im_self` and `im_func` attributes
+            reference, must have `__self__` and `__func__` attributes
             and be reconstructable via::
 
-                target.im_func.__get__(target.im_self)
+                target.__func__.__get__(target.__self__)
 
             which is true of built-in instance methods.
 
@@ -238,9 +245,7 @@ class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
             which will be passed a pointer to this object.
 
         """
-        assert getattr(target.im_self, target.__name__) == target, \
-               "method %s isn't available as the attribute %s of %s" % (
-                    target, target.__name__, target.im_self)
+        assert getattr(target.__self__, target.__name__) == target
         super(BoundNonDescriptorMethodWeakref, self).__init__(target,
                                                               on_delete)
 
@@ -248,7 +253,7 @@ class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
         """Return a strong reference to the bound method
 
         If the target cannot be retrieved, then will
-        return None, otherwise returns a bound instance
+        return None, otherwise return a bound instance
         method for our object and function.
 
         Note:
@@ -258,7 +263,7 @@ class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
         """
         target = self.weak_self()
         if target is not None:
-            function = self.weak_func()
+            function = self.weak_fun()
             if function is not None:
                 # Using curry() would be another option, but it erases the
                 # "signature" of the function. That is, after a function is
@@ -269,7 +274,7 @@ class BoundNonDescriptorMethodWeakref(BoundMethodWeakref):
                 return getattr(target, function.__name__)
 
 
-def get_bound_method_weakref(target, on_delete):
+def get_bound_method_weakref(target, on_delete):  # pragma: no cover
     """Instantiates the appropiate :class:`BoundMethodWeakRef`, depending
     on the details of the underlying class method implementation."""
     if hasattr(target, '__get__'):

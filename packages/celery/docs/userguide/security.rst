@@ -27,18 +27,18 @@ Broker
 ------
 
 It is imperative that the broker is guarded from unwanted access, especially
-if it is publically accesible.
+if accessible to the public.
 By default, workers trust that the data they get from the broker has not
 been tampered with. See `Message Signing`_ for information on how to make
-the broker connection more trusthworthy.
+the broker connection more trustworthy.
 
 The first line of defence should be to put a firewall in front of the broker,
 allowing only white-listed machines to access it.
 
-Keep in mind that both firewall misconfiguration, and temproraily disabling
+Keep in mind that both firewall misconfiguration, and temporarily disabling
 the firewall, is common in the real world. Solid security policy includes
-monitoring of firewall equipment to detect if they have been disabled, be it 
-accidentally or on purpose. 
+monitoring of firewall equipment to detect if they have been disabled, be it
+accidentally or on purpose.
 
 In other words, one should not blindly trust the firewall either.
 
@@ -49,7 +49,7 @@ http://www.rabbitmq.com/access-control.html.
 Client
 ------
 
-In Celery, "client" refers to anything that sends messages to the 
+In Celery, "client" refers to anything that sends messages to the
 broker, e.g. web-servers that apply tasks.
 
 Having the broker properly secured doesn't matter if arbitrary messages
@@ -61,7 +61,7 @@ Worker
 ------
 
 The default permissions of tasks running inside a worker are the same ones as
-the privileges of the worker itself. This applies to resources such as 
+the privileges of the worker itself. This applies to resources such as
 memory, file-systems and devices.
 
 An exception to this rule is when using the multiprocessing based task pool,
@@ -94,13 +94,37 @@ The default `pickle` serializer is convenient because it supports
 arbitrary Python objects, whereas other serializers only
 work with a restricted set of types.
 
-But for the same reasons the `pickle` serializer is inherently insecure[*]_,
+But for the same reasons the `pickle` serializer is inherently insecure [*]_,
 and should be avoided whenever clients are untrusted or
 unauthenticated.
 
 .. [*] http://nadiana.com/python-pickle-insecure
 
-Celery comes with a special `auth` serializer that validates
+You can disable untrusted content by specifying
+a white-list of accepted content-types in the :setting:`CELERY_ACCEPT_CONTENT`
+setting:
+
+.. versionadded:: 3.0.18
+
+.. note::
+
+    This setting was first supported in version 3.0.18. If you're
+    running an earlier version it will simply be ignored, so make
+    sure you're running a version that supports it.
+
+.. code-block:: python
+
+    CELERY_ACCEPT_CONTENT = ['json']
+
+
+This accepts a list of serializer names and content-types, so you could
+also specify the content type for json:
+
+.. code-block:: python
+
+    CELERY_ACCEPT_CONTENT = ['application/json']
+
+Celery also comes with a special `auth` serializer that validates
 communication between Celery clients and workers, making sure
 that messages originates from trusted sources.
 Using `Public-key cryptography` the `auth` serializer can verify the
@@ -132,18 +156,18 @@ the :setting:`CELERY_SECURITY_KEY`,
 :setting:`CELERY_SECURITY_CERTIFICATE` and :setting:`CELERY_SECURITY_CERT_STORE`
 settings respectively.
 With these configured it is also necessary to call the
-:func:`celery.security.setup_security` function.  Note that this will also
-disable all insucure serializers so that the worker won't accept
+:func:`celery.setup_security` function.  Note that this will also
+disable all insecure serializers so that the worker won't accept
 messages with untrusted content types.
 
 This is an example configuration using the `auth` serializer,
-with the private key and certificate files located in :`/etc/ssl`.
+with the private key and certificate files located in `/etc/ssl`.
 
 .. code-block:: python
 
-    CELERY_SECURITY_KEY = "/etc/ssl/private/worker.key"
-    CELERY_SECURITY_CERTIFICATE = "/etc/ssl/certs/worker.pem"
-    CELERY_SECURITY_CERT_STORE = "/etc/ssl/certs/\*.pem"
+    CELERY_SECURITY_KEY = '/etc/ssl/private/worker.key'
+    CELERY_SECURITY_CERTIFICATE = '/etc/ssl/certs/worker.pem'
+    CELERY_SECURITY_CERT_STORE = '/etc/ssl/certs/*.pem'
     from celery.security import setup_security
     setup_security()
 
@@ -182,7 +206,7 @@ This should be fairly easy to setup using syslog (see also `syslog-ng`_ and
 support for using syslog.
 
 A tip for the paranoid is to send logs using UDP and cut the
-transmit part of the logging servers network cable :-)
+transmit part of the logging server's network cable :-)
 
 .. _`syslog-ng`: http://en.wikipedia.org/wiki/Syslog-ng
 .. _`rsyslog`: http://www.rsyslog.com/

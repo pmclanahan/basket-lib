@@ -4,9 +4,6 @@ kombu.pools
 
 Public resource pools.
 
-:copyright: (c) 2009 - 2012 by Ask Solem.
-:license: BSD, see LICENSE for more details.
-
 """
 from __future__ import absolute_import
 
@@ -15,16 +12,18 @@ import os
 from itertools import chain
 
 from .connection import Resource
+from .five import range, values
 from .messaging import Producer
 from .utils import EqualityDict
+from .utils.functional import lazy
 
-__all__ = ["ProducerPool", "PoolGroup", "register_group",
-           "connections", "producers", "get_limit", "set_limit", "reset"]
+__all__ = ['ProducerPool', 'PoolGroup', 'register_group',
+           'connections', 'producers', 'get_limit', 'set_limit', 'reset']
 _limit = [200]
 _used = [False]
 _groups = []
 use_global_limit = object()
-disable_limit_protection = os.environ.get("KOMBU_DISABLE_LIMIT_PROTECTION")
+disable_limit_protection = os.environ.get('KOMBU_DISABLE_LIMIT_PROTECTION')
 
 
 class ProducerPool(Resource):
@@ -32,34 +31,46 @@ class ProducerPool(Resource):
 
     def __init__(self, connections, *args, **kwargs):
         self.connections = connections
-        self.Producer = kwargs.pop("Producer", None) or self.Producer
+        self.Producer = kwargs.pop('Producer', None) or self.Producer
         super(ProducerPool, self).__init__(*args, **kwargs)
 
     def _acquire_connection(self):
         return self.connections.acquire(block=True)
 
     def create_producer(self):
-        return self.Producer(self._acquire_connection())
+        conn = self._acquire_connection()
+        try:
+            return self.Producer(conn)
+        except BaseException:
+            conn.release()
+            raise
 
     def new(self):
-        return lambda: self.create_producer()
+        return lazy(self.create_producer)
 
     def setup(self):
         if self.limit:
-            for _ in xrange(self.limit):
+            for _ in range(self.limit):
                 self._resource.put_nowait(self.new())
+
+    def close_resource(self, resource):
+        pass
 
     def prepare(self, p):
         if callable(p):
             p = p()
-        if not p.channel:
-            connection = self._acquire_connection()
-            p.revive(connection.default_channel)
+        if p._channel is None:
+            conn = self._acquire_connection()
+            try:
+                p.revive(conn)
+            except BaseException:
+                conn.release()
+                raise
         return p
 
     def release(self, resource):
-        if resource.connection:
-            resource.connection.release()
+        if resource.__connection__:
+            resource.__connection__.release()
         resource.channel = None
         super(ProducerPool, self).release(resource)
 
@@ -70,7 +81,7 @@ class PoolGroup(EqualityDict):
         self.limit = limit
 
     def create(self, resource, limit):
-        raise NotImplementedError("PoolGroups must define ``create``")
+        raise NotImplementedError('PoolGroups must define ``create``')
 
     def __missing__(self, resource):
         limit = self.limit
@@ -102,7 +113,7 @@ producers = register_group(Producers(limit=use_global_limit))
 
 
 def _all_pools():
-    return chain(*[(g.itervalues() if g else iter([])) for g in _groups])
+    return chain(*[(values(g) if g else iter([])) for g in _groups])
 
 
 def get_limit():

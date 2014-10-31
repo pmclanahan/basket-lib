@@ -1,19 +1,36 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
+"""
+    celery.concurrency.eventlet
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-import os
-if not os.environ.get("EVENTLET_NOPATCH"):
-    import eventlet
-    import eventlet.debug
-    eventlet.monkey_patch()
-    eventlet.debug.hub_prevent_multiple_readers(False)
+    Eventlet pool implementation.
+
+"""
+from __future__ import absolute_import
 
 import sys
 
 from time import time
 
-from .. import signals
-from ..utils import timer2
+__all__ = ['TaskPool']
+
+W_RACE = """\
+Celery module with %s imported before eventlet patched\
+"""
+RACE_MODS = ('billiard.', 'celery.', 'kombu.')
+
+
+#: Warn if we couldn't patch early enough,
+#: and thread/socket depending celery modules have already been loaded.
+for mod in (mod for mod in sys.modules if mod.startswith(RACE_MODS)):
+    for side in ('thread', 'threading', 'socket'):  # pragma: no cover
+        if getattr(mod, side, None):
+            import warnings
+            warnings.warn(RuntimeWarning(W_RACE % side))
+
+
+from celery import signals
+from celery.utils import timer2
 
 from . import base
 
@@ -35,18 +52,8 @@ class Schedule(timer2.Schedule):
         self._spawn_after = spawn_after
         self._queue = set()
 
-    def enter(self, entry, eta=None, priority=0):
-        try:
-            eta = timer2.to_timestamp(eta)
-        except OverflowError:
-            if not self.handle_error(sys.exc_info()):
-                raise
-
-        now = time()
-        if eta is None:
-            eta = now
-        secs = max(eta - now, 0)
-
+    def _enter(self, eta, priority, entry):
+        secs = max(eta - time(), 0)
         g = self._spawn_after(secs, entry)
         self._queue.add(g)
         g.link(self._entry_exit, entry)
@@ -54,7 +61,6 @@ class Schedule(timer2.Schedule):
         g.eta = eta
         g.priority = priority
         g.cancelled = False
-
         return g
 
     def _entry_exit(self, g, entry):
@@ -77,7 +83,7 @@ class Schedule(timer2.Schedule):
 
     @property
     def queue(self):
-        return [(g.eta, g.priority, g.entry) for g in self._queue]
+        return self._queue
 
 
 class Timer(timer2.Timer):
@@ -102,9 +108,9 @@ class Timer(timer2.Timer):
 class TaskPool(base.BasePool):
     Timer = Timer
 
-    rlimit_safe = False
     signal_safe = False
     is_green = True
+    task_join_will_block = False
 
     def __init__(self, *args, **kwargs):
         from eventlet import greenthread
@@ -119,6 +125,8 @@ class TaskPool(base.BasePool):
     def on_start(self):
         self._pool = self.Pool(self.limit)
         signals.eventlet_pool_started.send(sender=self)
+        self._quick_put = self._pool.spawn_n
+        self._quick_apply_sig = signals.eventlet_pool_apply.send
 
     def on_stop(self):
         signals.eventlet_pool_preshutdown.send(sender=self)
@@ -127,9 +135,27 @@ class TaskPool(base.BasePool):
         signals.eventlet_pool_postshutdown.send(sender=self)
 
     def on_apply(self, target, args=None, kwargs=None, callback=None,
-            accept_callback=None, **_):
-        signals.eventlet_pool_apply.send(sender=self,
-                target=target, args=args, kwargs=kwargs)
-        self._pool.spawn_n(apply_target, target, args, kwargs,
-                           callback, accept_callback,
-                           self.getpid)
+                 accept_callback=None, **_):
+        self._quick_apply_sig(
+            sender=self, target=target, args=args, kwargs=kwargs,
+        )
+        self._quick_put(apply_target, target, args, kwargs,
+                        callback, accept_callback,
+                        self.getpid)
+
+    def grow(self, n=1):
+        limit = self.limit + n
+        self._pool.resize(limit)
+        self.limit = limit
+
+    def shrink(self, n=1):
+        limit = self.limit - n
+        self._pool.resize(limit)
+        self.limit = limit
+
+    def _get_info(self):
+        return {
+            'max-concurrency': self.limit,
+            'free-threads': self._pool.free(),
+            'running-threads': self._pool.running(),
+        }

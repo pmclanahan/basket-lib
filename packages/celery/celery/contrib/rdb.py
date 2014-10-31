@@ -11,9 +11,9 @@ Inspired by http://snippets.dzone.com/posts/show/7248
 .. code-block:: python
 
     from celery.contrib import rdb
-    from celery.task import task
+    from celery import task
 
-    @task
+    @task()
     def add(x, y):
         result = x + y
         rdb.set_trace()
@@ -31,13 +31,10 @@ Inspired by http://snippets.dzone.com/posts/show/7248
 
     Base port to bind to.  Default is 6899.
     The debugger will try to find an available port starting from the
-    base port.  The selected port will be logged by celeryd.
-
-:copyright: (c) 2009 - 2012 by Ask Solem.
-:license: BSD, see LICENSE for more details.
+    base port.  The selected port will be logged by the worker.
 
 """
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 
 import errno
 import os
@@ -46,64 +43,95 @@ import sys
 
 from pdb import Pdb
 
+from billiard import current_process
+
+from celery.five import range
+from celery.platforms import ignore_errno
+
+__all__ = ['CELERY_RDB_HOST', 'CELERY_RDB_PORT', 'default_port',
+           'Rdb', 'debugger', 'set_trace']
+
 default_port = 6899
 
-CELERY_RDB_HOST = os.environ.get("CELERY_RDB_HOST") or "127.0.0.1"
-CELERY_RDB_PORT = int(os.environ.get("CELERY_RDB_PORT") or default_port)
+CELERY_RDB_HOST = os.environ.get('CELERY_RDB_HOST') or '127.0.0.1'
+CELERY_RDB_PORT = int(os.environ.get('CELERY_RDB_PORT') or default_port)
 
 #: Holds the currently active debugger.
 _current = [None]
 
-_frame = getattr(sys, "_getframe")
+_frame = getattr(sys, '_getframe')
+
+NO_AVAILABLE_PORT = """\
+{self.ident}: Couldn't find an available port.
+
+Please specify one using the CELERY_RDB_PORT environment variable.
+"""
+
+BANNER = """\
+{self.ident}: Please telnet into {self.host} {self.port}.
+
+Type `exit` in session to continue.
+
+{self.ident}: Waiting for client...
+"""
+
+SESSION_STARTED = '{self.ident}: Now in session with {self.remote_addr}.'
+SESSION_ENDED = '{self.ident}: Session with {self.remote_addr} ended.'
 
 
 class Rdb(Pdb):
-    me = "Remote Debugger"
+    me = 'Remote Debugger'
     _prev_outs = None
     _sock = None
 
     def __init__(self, host=CELERY_RDB_HOST, port=CELERY_RDB_PORT,
-            port_search_limit=100, port_skew=+0):
+                 port_search_limit=100, port_skew=+0, out=sys.stdout):
         self.active = True
-
-        try:
-            from multiprocessing import current_process
-            _, port_skew = current_process().name.split('-')
-        except (ImportError, ValueError):
-            pass
-        port_skew = int(port_skew)
+        self.out = out
 
         self._prev_handles = sys.stdin, sys.stdout
+
+        self._sock, this_port = self.get_avail_port(
+            host, port, port_search_limit, port_skew,
+        )
+        self._sock.setblocking(1)
+        self._sock.listen(1)
+        self.ident = '{0}:{1}'.format(self.me, this_port)
+        self.host = host
+        self.port = this_port
+        self.say(BANNER.format(self=self))
+
+        self._client, address = self._sock.accept()
+        self._client.setblocking(1)
+        self.remote_addr = ':'.join(str(v) for v in address)
+        self.say(SESSION_STARTED.format(self=self))
+        self._handle = sys.stdin = sys.stdout = self._client.makefile('rw')
+        Pdb.__init__(self, completekey='tab',
+                     stdin=self._handle, stdout=self._handle)
+
+    def get_avail_port(self, host, port, search_limit=100, skew=+0):
+        try:
+            _, skew = current_process().name.split('-')
+            skew = int(skew)
+        except ValueError:
+            pass
         this_port = None
-        for i in xrange(port_search_limit):
-            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            this_port = port + port_skew + i
+        for i in range(search_limit):
+            _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            this_port = port + skew + i
             try:
-                self._sock.bind((host, this_port))
-            except socket.error, exc:
+                _sock.bind((host, this_port))
+            except socket.error as exc:
                 if exc.errno in [errno.EADDRINUSE, errno.EINVAL]:
                     continue
                 raise
             else:
-                break
+                return _sock, this_port
         else:
-            raise Exception(
-                "%s: Could not find available port. Please set using "
-                "environment variable CELERY_RDB_PORT" % (self.me, ))
+            raise Exception(NO_AVAILABLE_PORT.format(self=self))
 
-        self._sock.listen(1)
-        me = "%s:%s" % (self.me, this_port)
-        context = self.context = {"me": me, "host": host, "port": this_port}
-        print("%(me)s: Please telnet %(host)s %(port)s."
-              "  Type `exit` in session to continue." % context)
-        print("%(me)s: Waiting for client..." % context)
-
-        self._client, address = self._sock.accept()
-        context["remote_addr"] = ":".join(map(str, address))
-        print("%(me)s: In session with %(remote_addr)s" % context)
-        self._handle = sys.stdin = sys.stdout = self._client.makefile("rw")
-        Pdb.__init__(self, completekey="tab",
-                           stdin=self._handle, stdout=self._handle)
+    def say(self, m):
+        print(m, file=self.out)
 
     def _close_session(self):
         self.stdin, self.stdout = sys.stdin, sys.stdout = self._prev_handles
@@ -111,7 +139,7 @@ class Rdb(Pdb):
         self._client.close()
         self._sock.close()
         self.active = False
-        print("%(me)s: Session %(remote_addr)s ended." % self.context)
+        self.say(SESSION_ENDED.format(self=self))
 
     def do_continue(self, arg):
         self._close_session()
@@ -128,12 +156,8 @@ class Rdb(Pdb):
     def set_trace(self, frame=None):
         if frame is None:
             frame = _frame().f_back
-        try:
+        with ignore_errno(errno.ECONNRESET):
             Pdb.set_trace(self, frame)
-        except socket.error, exc:
-            # connection reset by peer.
-            if exc.errno != errno.ECONNRESET:
-                raise
 
     def set_quit(self):
         # this raises a BdbQuit exception that we are unable to catch.
@@ -141,7 +165,7 @@ class Rdb(Pdb):
 
 
 def debugger():
-    """Returns the current debugger instance (if any),
+    """Return the current debugger instance (if any),
     or creates a new one."""
     rdb = _current[0]
     if rdb is None or not rdb.active:

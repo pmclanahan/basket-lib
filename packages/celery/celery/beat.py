@@ -3,10 +3,7 @@
     celery.beat
     ~~~~~~~~~~~
 
-    The Celery periodic task scheduler.
-
-    :copyright: (c) 2009 - 2012 by Ask Solem.
-    :license: BSD, see LICENSE for more details.
+    The periodic task scheduler.
 
 """
 from __future__ import absolute_import
@@ -16,25 +13,32 @@ import os
 import time
 import shelve
 import sys
-import threading
 import traceback
-try:
-    import multiprocessing
-except ImportError:
-    multiprocessing = None  # noqa
 
-from kombu.utils import reprcall
+from threading import Event, Thread
+
+from billiard import Process, ensure_multiprocessing
+from billiard.common import reset_signals
+from kombu.utils import cached_property, reprcall
+from kombu.utils.functional import maybe_evaluate
 
 from . import __version__
 from . import platforms
-from . import registry
 from . import signals
-from . import current_app
-from .app import app_or_default
-from .log import SilenceRepeated
+from .five import items, reraise, values, monotonic
 from .schedules import maybe_schedule, crontab
-from .utils import cached_property, instantiate, maybe_promise
+from .utils.imports import instantiate
 from .utils.timeutils import humanize_seconds
+from .utils.log import get_logger, iter_open_logger_fds
+
+__all__ = ['SchedulingError', 'ScheduleEntry', 'Scheduler',
+           'PersistentScheduler', 'Service', 'EmbeddedService']
+
+logger = get_logger(__name__)
+debug, info, error, warning = (logger.debug, logger.info,
+                               logger.error, logger.warning)
+
+DEFAULT_MAX_INTERVAL = 300  # 5 minutes
 
 
 class SchedulingError(Exception):
@@ -77,27 +81,36 @@ class ScheduleEntry(object):
     total_run_count = 0
 
     def __init__(self, name=None, task=None, last_run_at=None,
-            total_run_count=None, schedule=None, args=(), kwargs={},
-            options={}, relative=False):
+                 total_run_count=None, schedule=None, args=(), kwargs={},
+                 options={}, relative=False, app=None):
+        self.app = app
         self.name = name
         self.task = task
         self.args = args
         self.kwargs = kwargs
         self.options = options
-        self.schedule = maybe_schedule(schedule, relative)
+        self.schedule = maybe_schedule(schedule, relative, app=self.app)
         self.last_run_at = last_run_at or self._default_now()
         self.total_run_count = total_run_count or 0
 
     def _default_now(self):
-        return current_app.now()
+        return self.schedule.now() if self.schedule else self.app.now()
 
     def _next_instance(self, last_run_at=None):
-        """Returns a new instance of the same class, but with
+        """Return a new instance of the same class, but with
         its date and count fields updated."""
-        return self.__class__(**dict(self,
-                                last_run_at=last_run_at or self._default_now(),
-                                total_run_count=self.total_run_count + 1))
+        return self.__class__(**dict(
+            self,
+            last_run_at=last_run_at or self._default_now(),
+            total_run_count=self.total_run_count + 1,
+        ))
     __next__ = next = _next_instance  # for 2to3
+
+    def __reduce__(self):
+        return self.__class__, (
+            self.name, self.task, self.last_run_at, self.total_run_count,
+            self.schedule, self.args, self.kwargs, self.options,
+        )
 
     def update(self, other):
         """Update values from another entry.
@@ -106,83 +119,93 @@ class ScheduleEntry(object):
         options).
 
         """
-        self.__dict__.update({"task": other.task, "schedule": other.schedule,
-                              "args": other.args, "kwargs": other.kwargs,
-                              "options": other.options})
+        self.__dict__.update({'task': other.task, 'schedule': other.schedule,
+                              'args': other.args, 'kwargs': other.kwargs,
+                              'options': other.options})
 
     def is_due(self):
-        """See :meth:`celery.task.base.PeriodicTask.is_due`."""
+        """See :meth:`~celery.schedule.schedule.is_due`."""
         return self.schedule.is_due(self.last_run_at)
 
     def __iter__(self):
-        return vars(self).iteritems()
+        return iter(items(vars(self)))
 
     def __repr__(self):
-        return ("<Entry: %s %s {%s}" % (self.name,
-                    reprcall(self.task, self.args or (), self.kwargs or {}),
-                    self.schedule))
+        return '<Entry: {0.name} {call} {0.schedule}'.format(
+            self,
+            call=reprcall(self.task, self.args or (), self.kwargs or {}),
+        )
 
 
 class Scheduler(object):
     """Scheduler for periodic tasks.
 
+    The :program:`celery beat` program may instantiate this class
+    multiple times for introspection purposes, but then with the
+    ``lazy`` argument set.  It is important for subclasses to
+    be idempotent when this argument is set.
+
     :keyword schedule: see :attr:`schedule`.
-    :keyword logger: see :attr:`logger`.
     :keyword max_interval: see :attr:`max_interval`.
+    :keyword lazy: Do not set up the schedule.
 
     """
-
     Entry = ScheduleEntry
 
     #: The schedule dict/shelve.
     schedule = None
 
-    #: Current logger.
-    logger = None
-
     #: Maximum time to sleep between re-checking the schedule.
-    max_interval = 1
+    max_interval = DEFAULT_MAX_INTERVAL
 
     #: How often to sync the schedule (3 minutes by default)
     sync_every = 3 * 60
 
-    _last_sync = None
+    #: How many tasks can be called before a sync is forced.
+    sync_every_tasks = None
 
-    def __init__(self, schedule=None, logger=None, max_interval=None,
-            app=None, Publisher=None, lazy=False, **kwargs):
-        app = self.app = app_or_default(app)
-        self.data = maybe_promise({} if schedule is None else schedule)
-        self.logger = logger or app.log.get_default_logger(name="celery.beat")
-        self.max_interval = max_interval or \
-                                app.conf.CELERYBEAT_MAX_LOOP_INTERVAL
-        self.Publisher = Publisher or app.amqp.TaskPublisher
+    _last_sync = None
+    _tasks_since_sync = 0
+
+    logger = logger  # compat
+
+    def __init__(self, app, schedule=None, max_interval=None,
+                 Publisher=None, lazy=False, sync_every_tasks=None, **kwargs):
+        self.app = app
+        self.data = maybe_evaluate({} if schedule is None else schedule)
+        self.max_interval = (max_interval
+                             or app.conf.CELERYBEAT_MAX_LOOP_INTERVAL
+                             or self.max_interval)
+        self.sync_every_tasks = (
+            app.conf.CELERYBEAT_SYNC_EVERY if sync_every_tasks is None
+            else sync_every_tasks)
+        self.Publisher = Publisher or app.amqp.TaskProducer
         if not lazy:
             self.setup_schedule()
 
     def install_default_entries(self, data):
         entries = {}
-        if self.app.conf.CELERY_TASK_RESULT_EXPIRES:
-            if "celery.backend_cleanup" not in data:
-                entries["celery.backend_cleanup"] = {
-                        "task": "celery.backend_cleanup",
-                        "schedule": crontab("0", "4", "*"),
-                        "options": {"expires": 12 * 3600}}
+        if self.app.conf.CELERY_TASK_RESULT_EXPIRES and \
+                not self.app.backend.supports_autoexpire:
+            if 'celery.backend_cleanup' not in data:
+                entries['celery.backend_cleanup'] = {
+                    'task': 'celery.backend_cleanup',
+                    'schedule': crontab('0', '4', '*'),
+                    'options': {'expires': 12 * 3600}}
         self.update_from_dict(entries)
 
     def maybe_due(self, entry, publisher=None):
         is_due, next_time_to_run = entry.is_due()
 
         if is_due:
-            self.logger.info("Scheduler: Sending due task %s", entry.task)
+            info('Scheduler: Sending due task %s (%s)', entry.name, entry.task)
             try:
                 result = self.apply_async(entry, publisher=publisher)
-            except Exception, exc:
-                self.logger.error("Message Error: %s\n%s", exc,
-                                  traceback.format_stack(),
-                                  exc_info=True)
+            except Exception as exc:
+                error('Message Error: %s\n%s',
+                      exc, traceback.format_stack(), exc_info=True)
             else:
-                self.logger.debug("%s sent. id->%s", entry.task,
-                                                     result.task_id)
+                debug('%s sent. id->%s', entry.task, result.id)
         return next_time_to_run
 
     def tick(self):
@@ -193,7 +216,7 @@ class Scheduler(object):
         """
         remaining_times = []
         try:
-            for entry in self.schedule.itervalues():
+            for entry in values(self.schedule):
                 next_time_to_run = self.maybe_due(entry, self.publisher)
                 if next_time_to_run:
                     remaining_times.append(next_time_to_run)
@@ -203,11 +226,15 @@ class Scheduler(object):
         return min(remaining_times + [self.max_interval])
 
     def should_sync(self):
-        return (not self._last_sync or
-                (time.time() - self._last_sync) > self.sync_every)
+        return (
+            (not self._last_sync or
+               (monotonic() - self._last_sync) > self.sync_every) or
+            (self.sync_every_tasks and
+                self._tasks_since_sync >= self.sync_every_tasks)
+        )
 
     def reserve(self, entry):
-        new_entry = self.schedule[entry.name] = entry.next()
+        new_entry = self.schedule[entry.name] = next(entry)
         return new_entry
 
     def apply_async(self, entry, publisher=None, **kwargs):
@@ -215,7 +242,7 @@ class Scheduler(object):
         # so we have that done if an exception is raised (doesn't schedule
         # forever.)
         entry = self.reserve(entry)
-        task = registry.tasks.get(entry.task)
+        task = self.app.tasks.get(entry.task)
 
         try:
             if task:
@@ -226,16 +253,17 @@ class Scheduler(object):
                 result = self.send_task(entry.task, entry.args, entry.kwargs,
                                         publisher=publisher,
                                         **entry.options)
-        except Exception, exc:
-            raise SchedulingError, SchedulingError(
-                "Couldn't apply scheduled task %s: %s" % (
-                    entry.name, exc)), sys.exc_info()[2]
-
-        if self.should_sync():
-            self._do_sync()
+        except Exception as exc:
+            reraise(SchedulingError, SchedulingError(
+                "Couldn't apply scheduled task {0.name}: {exc}".format(
+                    entry, exc=exc)), sys.exc_info()[2])
+        finally:
+            self._tasks_since_sync += 1
+            if self.should_sync():
+                self._do_sync()
         return result
 
-    def send_task(self, *args, **kwargs):               # pragma: no cover
+    def send_task(self, *args, **kwargs):
         return self.app.send_task(*args, **kwargs)
 
     def setup_schedule(self):
@@ -243,10 +271,11 @@ class Scheduler(object):
 
     def _do_sync(self):
         try:
-            self.logger.debug("Celerybeat: Synchronizing schedule...")
+            debug('beat: Synchronizing schedule...')
             self.sync()
         finally:
-            self._last_sync = time.time()
+            self._last_sync = monotonic()
+            self._tasks_since_sync = 0
 
     def sync(self):
         pass
@@ -255,18 +284,20 @@ class Scheduler(object):
         self.sync()
 
     def add(self, **kwargs):
-        entry = self.Entry(**kwargs)
+        entry = self.Entry(app=self.app, **kwargs)
         self.schedule[entry.name] = entry
         return entry
 
     def _maybe_entry(self, name, entry):
         if isinstance(entry, self.Entry):
+            entry.app = self.app
             return entry
-        return self.Entry(**dict(entry, name=name))
+        return self.Entry(**dict(entry, name=name, app=self.app))
 
     def update_from_dict(self, dict_):
-        self.schedule.update(dict((name, self._maybe_entry(name, entry))
-                                for name, entry in dict_.items()))
+        self.schedule.update(dict(
+            (name, self._maybe_entry(name, entry))
+            for name, entry in items(dict_)))
 
     def merge_inplace(self, b):
         schedule = self.schedule
@@ -278,87 +309,111 @@ class Scheduler(object):
 
         # Update and add new items in the schedule
         for key in B:
-            entry = self.Entry(**dict(b[key], name=key))
+            entry = self.Entry(**dict(b[key], name=key, app=self.app))
             if schedule.get(key):
                 schedule[key].update(entry)
             else:
                 schedule[key] = entry
+
+    def _ensure_connected(self):
+        # callback called for each retry while the connection
+        # can't be established.
+        def _error_handler(exc, interval):
+            error('beat: Connection error: %s. '
+                  'Trying again in %s seconds...', exc, interval)
+
+        return self.connection.ensure_connection(
+            _error_handler, self.app.conf.BROKER_CONNECTION_MAX_RETRIES
+        )
 
     def get_schedule(self):
         return self.data
 
     def set_schedule(self, schedule):
         self.data = schedule
-
-    def _ensure_connected(self):
-        # callback called for each retry while the connection
-        # can't be established.
-        def _error_handler(exc, interval):
-            self.logger.error("Celerybeat: Connection error: %s. "
-                              "Trying again in %s seconds...", exc, interval)
-
-        return self.connection.ensure_connection(_error_handler,
-                    self.app.conf.BROKER_CONNECTION_MAX_RETRIES)
+    schedule = property(get_schedule, set_schedule)
 
     @cached_property
     def connection(self):
-        return self.app.broker_connection()
+        return self.app.connection()
 
     @cached_property
     def publisher(self):
-        return self.Publisher(connection=self._ensure_connected())
-
-    @property
-    def schedule(self):
-        return self.get_schedule()
+        return self.Publisher(self._ensure_connected())
 
     @property
     def info(self):
-        return ""
+        return ''
 
 
 class PersistentScheduler(Scheduler):
     persistence = shelve
+    known_suffixes = ('', '.db', '.dat', '.bak', '.dir')
 
     _store = None
 
     def __init__(self, *args, **kwargs):
-        self.schedule_filename = kwargs.get("schedule_filename")
+        self.schedule_filename = kwargs.get('schedule_filename')
         Scheduler.__init__(self, *args, **kwargs)
 
     def _remove_db(self):
-        for suffix in "", ".db", ".dat", ".bak", ".dir":
-            try:
+        for suffix in self.known_suffixes:
+            with platforms.ignore_errno(errno.ENOENT):
                 os.remove(self.schedule_filename + suffix)
-            except OSError, exc:
-                if exc.errno != errno.ENOENT:
-                    raise
 
     def setup_schedule(self):
         try:
             self._store = self.persistence.open(self.schedule_filename,
                                                 writeback=True)
-            entries = self._store.setdefault("entries", {})
-        except Exception, exc:
-            self.logger.error("Removing corrupted schedule file %r: %r",
-                              self.schedule_filename, exc, exc_info=True)
+        except Exception as exc:
+            error('Removing corrupted schedule file %r: %r',
+                  self.schedule_filename, exc, exc_info=True)
             self._remove_db()
             self._store = self.persistence.open(self.schedule_filename,
                                                 writeback=True)
         else:
-            if "__version__" not in self._store:
-                self._store.clear()   # remove schedule at 2.2.2 upgrade.
-        entries = self._store.setdefault("entries", {})
+            try:
+                self._store['entries']
+            except KeyError:
+                # new schedule db
+                self._store['entries'] = {}
+            else:
+                if '__version__' not in self._store:
+                    warning('DB Reset: Account for new __version__ field')
+                    self._store.clear()   # remove schedule at 2.2.2 upgrade.
+                elif 'tz' not in self._store:
+                    warning('DB Reset: Account for new tz field')
+                    self._store.clear()   # remove schedule at 3.0.8 upgrade
+                elif 'utc_enabled' not in self._store:
+                    warning('DB Reset: Account for new utc_enabled field')
+                    self._store.clear()   # remove schedule at 3.0.9 upgrade
+
+        tz = self.app.conf.CELERY_TIMEZONE
+        stored_tz = self._store.get('tz')
+        if stored_tz is not None and stored_tz != tz:
+            warning('Reset: Timezone changed from %r to %r', stored_tz, tz)
+            self._store.clear()   # Timezone changed, reset db!
+        utc = self.app.conf.CELERY_ENABLE_UTC
+        stored_utc = self._store.get('utc_enabled')
+        if stored_utc is not None and stored_utc != utc:
+            choices = {True: 'enabled', False: 'disabled'}
+            warning('Reset: UTC changed from %s to %s',
+                    choices[stored_utc], choices[utc])
+            self._store.clear()   # UTC setting changed, reset db!
+        entries = self._store.setdefault('entries', {})
         self.merge_inplace(self.app.conf.CELERYBEAT_SCHEDULE)
         self.install_default_entries(self.schedule)
-        self._store["__version__"] = __version__
+        self._store.update(__version__=__version__, tz=tz, utc_enabled=utc)
         self.sync()
-        self.logger.debug("Current schedule:\n" +
-                          "\n".join(repr(entry)
-                                    for entry in entries.itervalues()))
+        debug('Current schedule:\n' + '\n'.join(
+            repr(entry) for entry in values(entries)))
 
     def get_schedule(self):
-        return self._store["entries"]
+        return self._store['entries']
+
+    def set_schedule(self, schedule):
+        self._store['entries'] = schedule
+    schedule = property(get_schedule, set_schedule)
 
     def sync(self):
         if self._store is not None:
@@ -370,43 +425,46 @@ class PersistentScheduler(Scheduler):
 
     @property
     def info(self):
-        return "    . db -> %s" % (self.schedule_filename, )
+        return '    . db -> {self.schedule_filename}'.format(self=self)
 
 
 class Service(object):
     scheduler_cls = PersistentScheduler
 
-    def __init__(self, logger=None, max_interval=None, schedule_filename=None,
-            scheduler_cls=None, app=None):
-        app = self.app = app_or_default(app)
-        self.max_interval = max_interval or \
-                                app.conf.CELERYBEAT_MAX_LOOP_INTERVAL
+    def __init__(self, app, max_interval=None, schedule_filename=None,
+                 scheduler_cls=None):
+        self.app = app
+        self.max_interval = (max_interval
+                             or app.conf.CELERYBEAT_MAX_LOOP_INTERVAL)
         self.scheduler_cls = scheduler_cls or self.scheduler_cls
-        self.logger = logger or app.log.get_default_logger(name="celery.beat")
-        self.schedule_filename = schedule_filename or \
-                                    app.conf.CELERYBEAT_SCHEDULE_FILENAME
+        self.schedule_filename = (
+            schedule_filename or app.conf.CELERYBEAT_SCHEDULE_FILENAME)
 
-        self._is_shutdown = threading.Event()
-        self._is_stopped = threading.Event()
-        self.debug = SilenceRepeated(self.logger.debug,
-                        10 if self.max_interval < 60 else 1)
+        self._is_shutdown = Event()
+        self._is_stopped = Event()
 
-    def start(self, embedded_process=False):
-        self.logger.info("Celerybeat: Starting...")
-        self.logger.debug("Celerybeat: Ticking with max interval->%s",
-                          humanize_seconds(self.scheduler.max_interval))
+    def __reduce__(self):
+        return self.__class__, (self.max_interval, self.schedule_filename,
+                                self.scheduler_cls, self.app)
+
+    def start(self, embedded_process=False, drift=-0.010):
+        info('beat: Starting...')
+        debug('beat: Ticking with max interval->%s',
+              humanize_seconds(self.scheduler.max_interval))
 
         signals.beat_init.send(sender=self)
         if embedded_process:
             signals.beat_embedded_init.send(sender=self)
-            platforms.set_process_title("celerybeat")
+            platforms.set_process_title('celery beat')
 
         try:
-            while not self._is_shutdown.isSet():
+            while not self._is_shutdown.is_set():
                 interval = self.scheduler.tick()
-                self.debug("Celerybeat: Waking up %s.",
-                           humanize_seconds(interval, prefix="in "))
-                time.sleep(interval)
+                interval = interval + drift if interval else interval
+                if interval and interval > 0:
+                    debug('beat: Waking up %s.',
+                          humanize_seconds(interval, prefix='in '))
+                    time.sleep(interval)
         except (KeyboardInterrupt, SystemExit):
             self._is_shutdown.set()
         finally:
@@ -417,7 +475,7 @@ class Service(object):
         self._is_stopped.set()
 
     def stop(self, wait=False):
-        self.logger.info("Celerybeat: Shutting down...")
+        info('beat: Shutting down...')
         self._is_shutdown.set()
         wait and self._is_stopped.wait()  # block until shutdown done.
 
@@ -426,7 +484,6 @@ class Service(object):
         scheduler = instantiate(self.scheduler_cls,
                                 app=self.app,
                                 schedule_filename=filename,
-                                logger=self.logger,
                                 max_interval=self.max_interval,
                                 lazy=lazy)
         return scheduler
@@ -436,14 +493,14 @@ class Service(object):
         return self.get_scheduler()
 
 
-class _Threaded(threading.Thread):
+class _Threaded(Thread):
     """Embedded task scheduler using threading."""
 
     def __init__(self, *args, **kwargs):
         super(_Threaded, self).__init__()
         self.service = Service(*args, **kwargs)
-        self.setDaemon(True)
-        self.setName("Beat")
+        self.daemon = True
+        self.name = 'Beat'
 
     def run(self):
         self.service.start()
@@ -452,38 +509,40 @@ class _Threaded(threading.Thread):
         self.service.stop(wait=True)
 
 
-if multiprocessing is not None:
-
-    class _Process(multiprocessing.Process):
-        """Embedded task scheduler using multiprocessing."""
+try:
+    ensure_multiprocessing()
+except NotImplementedError:     # pragma: no cover
+    _Process = None
+else:
+    class _Process(Process):    # noqa
 
         def __init__(self, *args, **kwargs):
             super(_Process, self).__init__()
             self.service = Service(*args, **kwargs)
-            self.name = "Beat"
+            self.name = 'Beat'
 
         def run(self):
-            platforms.signals.reset("SIGTERM")
+            reset_signals(full=False)
+            platforms.close_open_fds([
+                sys.__stdin__, sys.__stdout__, sys.__stderr__,
+            ] + list(iter_open_logger_fds()))
             self.service.start(embedded_process=True)
 
         def stop(self):
             self.service.stop()
             self.terminate()
-else:
-    _Process = None
 
 
 def EmbeddedService(*args, **kwargs):
     """Return embedded clock service.
 
     :keyword thread: Run threaded instead of as a separate process.
-        Default is :const:`False`.
+        Uses :mod:`multiprocessing` by default, if available.
 
     """
-    if kwargs.pop("thread", False) or _Process is None:
+    if kwargs.pop('thread', False) or _Process is None:
         # Need short max interval to be able to stop thread
         # in reasonable time.
-        kwargs.setdefault("max_interval", 1)
+        kwargs.setdefault('max_interval', 1)
         return _Threaded(*args, **kwargs)
-
     return _Process(*args, **kwargs)

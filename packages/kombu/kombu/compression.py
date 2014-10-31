@@ -4,13 +4,10 @@ kombu.compression
 
 Compression utilities.
 
-:copyright: (c) 2009 - 2012 by Ask Solem.
-:license: BSD, see LICENSE for more details.
-
 """
 from __future__ import absolute_import
 
-from kombu.utils.encoding import ensure_bytes, bytes_to_str
+from kombu.utils.encoding import ensure_bytes
 
 import zlib
 
@@ -18,8 +15,8 @@ _aliases = {}
 _encoders = {}
 _decoders = {}
 
-__all__ = ["register", "encoders", "get_encoder",
-           "get_decoder", "compress", "decompress"]
+__all__ = ['register', 'encoders', 'get_encoder',
+           'get_decoder', 'compress', 'decompress']
 
 
 def register(encoder, decoder, content_type, aliases=[]):
@@ -37,8 +34,8 @@ def register(encoder, decoder, content_type, aliases=[]):
 
 
 def encoders():
-    """Returns a list of available compression methods."""
-    return _encoders.keys()
+    """Return a list of available compression methods."""
+    return list(_encoders)
 
 
 def get_encoder(t):
@@ -70,12 +67,12 @@ def decompress(body, content_type):
     :param content_type: mime-type of compression method used.
 
     """
-    return bytes_to_str(get_decoder(content_type)(body))
+    return get_decoder(content_type)(body)
 
 
 register(zlib.compress,
          zlib.decompress,
-         "application/x-gzip", aliases=["gzip", "zlib"])
+         'application/x-gzip', aliases=['gzip', 'zlib'])
 try:
     import bz2
 except ImportError:
@@ -83,4 +80,4 @@ except ImportError:
 else:
     register(bz2.compress,
              bz2.decompress,
-             "application/x-bz2", aliases=["bzip2", "bzip"])
+             'application/x-bz2', aliases=['bzip2', 'bzip'])

@@ -1,6 +1,7 @@
 lib/python
-packages/amqplib
+packages/amqp
 packages/anyjson
+packages/billiard
 packages/celery
 packages/coverage
 packages/django-celery

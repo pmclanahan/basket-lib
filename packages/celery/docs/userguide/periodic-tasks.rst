@@ -10,7 +10,7 @@
 Introduction
 ============
 
-:program:`celerybeat` is a scheduler.  It kicks off tasks at regular intervals,
+:program:`celery beat` is a scheduler.  It kicks off tasks at regular intervals,
 which are then executed by the worker nodes available in the cluster.
 
 By default the entries are taken from the :setting:`CELERYBEAT_SCHEDULE` setting,
@@ -21,6 +21,53 @@ You have to ensure only a single scheduler is running for a schedule
 at a time, otherwise you would end up with duplicate tasks.  Using
 a centralized approach means the schedule does not have to be synchronized,
 and the service can operate without using locks.
+
+.. _beat-timezones:
+
+Time Zones
+==========
+
+The periodic task schedules uses the UTC time zone by default,
+but you can change the time zone used using the :setting:`CELERY_TIMEZONE`
+setting.
+
+An example time zone could be `Europe/London`:
+
+.. code-block:: python
+
+    CELERY_TIMEZONE = 'Europe/London'
+
+
+This setting must be added to your app, either by configuration it directly
+using (``app.conf.CELERY_TIMEZONE = 'Europe/London'``), or by adding
+it to your configuration module if you have set one up using
+``app.config_from_object``.  See :ref:`celerytut-configuration` for
+more information about configuration options.
+
+
+The default scheduler (storing the schedule in the :file:`celerybeat-schedule`
+file) will automatically detect that the time zone has changed, and so will
+reset the schedule itself, but other schedulers may not be so smart (e.g. the
+Django database scheduler, see below) and in that case you will have to reset the
+schedule manually.
+
+.. admonition:: Django Users
+
+    Celery recommends and is compatible with the new ``USE_TZ`` setting introduced
+    in Django 1.4.
+
+    For Django users the time zone specified in the ``TIME_ZONE`` setting
+    will be used, or you can specify a custom time zone for Celery alone
+    by using the :setting:`CELERY_TIMEZONE` setting.
+
+    The database scheduler will not reset when timezone related settings
+    change, so you must do this manually:
+
+    .. code-block:: bash
+
+        $ python manage.py shell
+        >>> from djcelery.models import PeriodicTask
+        >>> PeriodicTask.objects.update(last_run_at=None)
 
 .. _beat-entries:
 
@@ -37,18 +84,34 @@ Example: Run the `tasks.add` task every 30 seconds.
     from datetime import timedelta
 
     CELERYBEAT_SCHEDULE = {
-        "runs-every-30-seconds": {
-            "task": "tasks.add",
-            "schedule": timedelta(seconds=30),
-            "args": (16, 16)
+        'add-every-30-seconds': {
+            'task': 'tasks.add',
+            'schedule': timedelta(seconds=30),
+            'args': (16, 16)
         },
     }
 
+    CELERY_TIMEZONE = 'UTC'
+
+
+.. note::
+
+    If you are wondering where these settings should go then
+    please see :ref:`celerytut-configuration`.  You can either
+    set these options on your app directly or you can keep
+    a separate module for configuration.
 
 Using a :class:`~datetime.timedelta` for the schedule means the task will
-be executed 30 seconds after `celerybeat` starts, and then every 30 seconds
-after the last run.  A crontab like schedule also exists, see the section
-on `Crontab schedules`_.
+be sent in 30 second intervals (the first task will be sent 30 seconds
+after `celery beat` starts, and then every 30 seconds
+after the last run).
+
+A crontab like schedule also exists, see the section on `Crontab schedules`_.
+
+Like with ``cron``, the tasks may overlap if the first task does not complete
+before the next.  If that is a concern you should use a locking
+strategy to ensure only one instance can run at a time (see for example
+:ref:`cookbook-task-serial`).
 
 .. _beat-entry-fields:
 
@@ -91,7 +154,7 @@ Available Fields
     second, minute, hour or day depending on the period of the timedelta.
 
     If `relative` is true the frequency is not rounded and will be
-    relative to the time when :program:`celerybeat` was started.
+    relative to the time when :program:`celery beat` was started.
 
 .. _beat-crontab:
 
@@ -100,7 +163,7 @@ Crontab schedules
 
 If you want more control over when the task is executed, for
 example, a particular time of day or day of the week, you can use
-the `crontab` schedule type:
+the :class:`~celery.schedules.crontab` schedule type:
 
 .. code-block:: python
 
@@ -108,10 +171,10 @@ the `crontab` schedule type:
 
     CELERYBEAT_SCHEDULE = {
         # Executes every Monday morning at 7:30 A.M
-        "every-monday-morning": {
-            "task": "tasks.add",
-            "schedule": crontab(hour=7, minute=30, day_of_week=1),
-            "args": (16, 16),
+        'add-every-monday-morning': {
+            'task': 'tasks.add',
+            'schedule': crontab(hour=7, minute=30, day_of_week=1),
+            'args': (16, 16),
         },
     }
 
@@ -124,115 +187,107 @@ The syntax of these crontab expressions are very flexible.  Some examples:
 +-----------------------------------------+--------------------------------------------+
 | ``crontab(minute=0, hour=0)``           | Execute daily at midnight.                 |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute=0, hour="*/3")``       | Execute every three hours:                 |
-|                                         | 3am, 6am, 9am, noon, 3pm, 6pm, 9pm.        |
+| ``crontab(minute=0, hour='*/3')``       | Execute every three hours:                 |
+|                                         | midnight, 3am, 6am, 9am,                   |
+|                                         | noon, 3pm, 6pm, 9pm.                       |
 +-----------------------------------------+--------------------------------------------+
 | ``crontab(minute=0,``                   | Same as previous.                          |
-|         ``hour=[0,3,6,9,12,15,18,21])`` |                                            |
+|         ``hour='0,3,6,9,12,15,18,21')`` |                                            |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute="*/15")``              | Execute every 15 minutes.                  |
+| ``crontab(minute='*/15')``              | Execute every 15 minutes.                  |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(day_of_week="sunday")``       | Execute every minute (!) at Sundays.       |
+| ``crontab(day_of_week='sunday')``       | Execute every minute (!) at Sundays.       |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute="*",``                 | Same as previous.                          |
-|         ``hour="*",``                   |                                            |
-|         ``day_of_week="sun")``          |                                            |
+| ``crontab(minute='*',``                 | Same as previous.                          |
+|         ``hour='*',``                   |                                            |
+|         ``day_of_week='sun')``          |                                            |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute="*/10",``              | Execute every ten minutes, but only        |
-|         ``hour="3,17,22",``             | between 3-4 am, 5-6 pm and 10-11 pm on     |
-|         ``day_of_week="thu,fri")``      | Thursdays or Fridays.                      |
+| ``crontab(minute='*/10',``              | Execute every ten minutes, but only        |
+|         ``hour='3,17,22',``             | between 3-4 am, 5-6 pm and 10-11 pm on     |
+|         ``day_of_week='thu,fri')``      | Thursdays or Fridays.                      |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute=0, hour="*/2,*/3")``   | Execute every even hour, and every hour    |
+| ``crontab(minute=0, hour='*/2,*/3')``   | Execute every even hour, and every hour    |
 |                                         | divisible by three. This means:            |
 |                                         | at every hour *except*: 1am,               |
 |                                         | 5am, 7am, 11am, 1pm, 5pm, 7pm,             |
 |                                         | 11pm                                       |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute=0, hour="*/5")``       | Execute hour divisible by 5. This means    |
+| ``crontab(minute=0, hour='*/5')``       | Execute hour divisible by 5. This means    |
 |                                         | that it is triggered at 3pm, not 5pm       |
 |                                         | (since 3pm equals the 24-hour clock        |
 |                                         | value of "15", which is divisible by 5).   |
 +-----------------------------------------+--------------------------------------------+
-| ``crontab(minute=0, hour="*/3,8-17")``  | Execute every hour divisible by 3, and     |
+| ``crontab(minute=0, hour='*/3,8-17')``  | Execute every hour divisible by 3, and     |
 |                                         | every hour during office hours (8am-5pm).  |
 +-----------------------------------------+--------------------------------------------+
+| ``crontab(0, 0, 0, day_of_month='2')``  | Execute on the second day of every month.  |
+|                                         |                                            |
++-----------------------------------------+--------------------------------------------+
+| ``crontab(0, 0, 0,'``                   | Execute on every even numbered day.        |
+|         ``day_of_month='2-30/3')``      |                                            |
++-----------------------------------------+--------------------------------------------+
+| ``crontab(0, 0, 0,``                    | Execute on the first and third weeks of    |
+|         ``day_of_month='1-7,15-21')``   | the month.                                 |
++-----------------------------------------+--------------------------------------------+
+| ``crontab(0, 0, 0, day_of_month='11',`` | Execute on 11th of May every year.         |
+|          ``month_of_year='5')``         |                                            |
++-----------------------------------------+--------------------------------------------+
+| ``crontab(0, 0, 0,``                    | Execute on the first month of every        |
+|         ``month_of_year='*/3')``        | quarter.                                   |
++-----------------------------------------+--------------------------------------------+
 
-.. _beat-timezones:
-
-Timezones
-=========
-
-By default the current local timezone is used, but you can also set a specific
-timezone by enabling the :setting:`CELERY_ENABLE_UTC` setting and configuring
-the :setting:`CELERY_TIMEZONE` setting:
-
-.. code-block:: python
-
-    CELERY_ENABLE_UTC = True
-    CELERY_TIMEZONE = "Europe/London"
-
-.. admonition:: Django Users
-
-    For Django users the timezone specified in the ``TIME_ZONE`` setting
-    will be used, but *not if the :setting:`CELERY_ENABLE_UTC` setting is
-    enabled*.
-
-    Celery is also compatible with the new ``USE_TZ`` setting introduced
-    in Django 1.4.
-
-.. note::
-
-    The `pytz`_ library is recommended when setting a default timezone.
-    If :mod:`pytz` is not installed it will fallback to the mod:`dateutil`
-    library, which depends on a system timezone file being available for
-    the timezone selected.
-
-    Timezone definitions change frequently, so for the best results
-    an up to date :mod:`pytz` installation should be used.
-
-
-.. _`pytz`: http://pypi.python.org/pypi/pytz/
+See :class:`celery.schedules.crontab` for more documentation.
 
 .. _beat-starting:
 
-Starting celerybeat
-===================
+Starting the Scheduler
+======================
 
-To start the :program:`celerybeat` service::
+To start the :program:`celery beat` service:
 
-    $ celerybeat
+.. code-block:: bash
 
-You can also start `celerybeat` with `celeryd` by using the `-B` option,
-this is convenient if you only intend to use one worker node::
+    $ celery -A proj beat
 
-    $ celeryd -B
+You can also start embed `beat` inside the worker by enabling
+workers `-B` option, this is convenient if you will never run
+more than one worker node, but it's not commonly used and for that
+reason is not recommended for production use:
 
-Celerybeat needs to store the last run times of the tasks in a local database
+.. code-block:: bash
+
+    $ celery -A proj worker -B
+
+Beat needs to store the last run times of the tasks in a local database
 file (named `celerybeat-schedule` by default), so it needs access to
 write in the current directory, or alternatively you can specify a custom
-location for this file::
+location for this file:
 
-    $ celerybeat -s /home/celery/var/run/celerybeat-schedule
+.. code-block:: bash
+
+    $ celery -A proj beat -s /home/celery/var/run/celerybeat-schedule
 
 
 .. note::
 
-    To daemonize celerybeat see :ref:`daemonizing`.
+    To daemonize beat see :ref:`daemonizing`.
 
 .. _beat-custom-schedulers:
 
 Using custom scheduler classes
 ------------------------------
 
-Custom scheduler classes can be specified on the command line (the `-S`
+Custom scheduler classes can be specified on the command-line (the `-S`
 argument).  The default scheduler is :class:`celery.beat.PersistentScheduler`,
 which is simply keeping track of the last run times in a local database file
 (a :mod:`shelve`).
 
 `django-celery` also ships with a scheduler that stores the schedule in the
-Django database::
+Django database:
 
-    $ celerybeat -S djcelery.schedulers.DatabaseScheduler
+.. code-block:: bash
+
+    $ celery -A proj beat -S djcelery.schedulers.DatabaseScheduler
 
 Using `django-celery`'s scheduler you can add, modify and remove periodic
 tasks from the Django Admin.

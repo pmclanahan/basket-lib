@@ -1,11 +1,13 @@
 # Django settings for celery_http_gateway project.
 
+import django
+
 DEBUG = True
 TEMPLATE_DEBUG = DEBUG
 
-CARROT_BACKEND = "amqp"
-CELERY_RESULT_BACKEND = "database"
-BROKER_URL = "amqp://guest:guest@localhost:5672//"
+CARROT_BACKEND = 'amqp'
+CELERY_RESULT_BACKEND = 'database'
+BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
 ADMINS = (
     # ('Your Name', 'your_email@domain.com'),
@@ -13,23 +15,24 @@ ADMINS = (
 
 MANAGERS = ADMINS
 
-# 'postgresql_psycopg2', 'postgresql', 'mysql', 'sqlite3' or 'oracle'.
-DATABASE_ENGINE = 'sqlite3'
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': 'development.db',
+        'USER': '',
+        'PASSWORD': '',
+        'HOST': '',
+        'PORT': '',
+    }
+}
 
-# path to database file if using sqlite3.
-DATABASE_NAME = 'development.db'
-
-# Not used with sqlite3.
-DATABASE_USER = ''
-
-# Not used with sqlite3.
-DATABASE_PASSWORD = ''
-
-# Set to empty string for localhost. Not used with sqlite3.
-DATABASE_HOST = ''
-
-# Set to empty string for default. Not used with sqlite3.
-DATABASE_PORT = ''
+if django.VERSION[:3] < (1, 3):
+    DATABASE_ENGINE = DATABASES['default']['ENGINE']
+    DATABASE_NAME = DATABASES['default']['NAME']
+    DATABASE_USER = DATABASES['default']['USER']
+    DATABASE_PASSWORD = DATABASES['default']['PASSWORD']
+    DATABASE_HOST = DATABASES['default']['HOST']
+    DATABASE_PORT = DATABASES['default']['PORT']
 
 # Local time zone for this installation. Choices can be found here:
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
@@ -69,7 +72,6 @@ SECRET_KEY = '#1i=edpk55k3781$z-p%b#dbn&n+-rtt83pgz2o9o)v8g7(owq'
 TEMPLATE_LOADERS = (
     'django.template.loaders.filesystem.load_template_source',
     'django.template.loaders.app_directories.load_template_source',
-#     'django.template.loaders.eggs.load_template_source',
 )
 
 MIDDLEWARE_CLASSES = (

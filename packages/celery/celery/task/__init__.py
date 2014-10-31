@@ -3,93 +3,57 @@
     celery.task
     ~~~~~~~~~~~
 
-    Creating tasks, subtasks, sets and chords.
-
-    :copyright: (c) 2009 - 2012 by Ask Solem.
-    :license: BSD, see LICENSE for more details.
+    This is the old task module, it should not be used anymore,
+    import from the main 'celery' module instead.
+    If you're looking for the decorator implementation then that's in
+    ``celery.app.base.Celery.task``.
 
 """
 from __future__ import absolute_import
 
-from ..app import app_or_default, current_task as _current_task
-from ..local import Proxy
+from celery._state import current_app, current_task as current
+from celery.five import LazyModule, recreate_module
+from celery.local import Proxy
 
-from .base import Task, PeriodicTask        # noqa
-from .sets import group, TaskSet, subtask   # noqa
-from .chords import chord                   # noqa
-from .control import discard_all            # noqa
-
-current = Proxy(_current_task)
-
-
-def task(*args, **kwargs):
-    """Decorator to create a task class out of any callable.
-
-    **Examples**
-
-    .. code-block:: python
-
-        @task
-        def refresh_feed(url):
-            return Feed.objects.get(url=url).refresh()
-
-    With setting extra options and using retry.
-
-    .. code-block:: python
-
-        @task(max_retries=10)
-        def refresh_feed(url):
-            try:
-                return Feed.objects.get(url=url).refresh()
-            except socket.error, exc:
-                refresh_feed.retry(exc=exc)
-
-    Calling the resulting task:
-
-            >>> refresh_feed("http://example.com/rss") # Regular
-            <Feed: http://example.com/rss>
-            >>> refresh_feed.delay("http://example.com/rss") # Async
-            <AsyncResult: 8998d0f4-da0b-4669-ba03-d5ab5ac6ad5d>
-    """
-    kwargs.setdefault("accept_magic_kwargs", False)
-    return app_or_default().task(*args, **kwargs)
+__all__ = [
+    'BaseTask', 'Task', 'PeriodicTask', 'task', 'periodic_task',
+    'group', 'chord', 'subtask', 'TaskSet',
+]
 
 
-def periodic_task(*args, **options):
-    """Decorator to create a task class out of any callable.
-
-        .. admonition:: Examples
-
-            .. code-block:: python
-
-                @task
-                def refresh_feed(url):
-                    return Feed.objects.get(url=url).refresh()
-
-            With setting extra options and using retry.
-
-            .. code-block:: python
-
-                from celery.task import current
-
-                @task(exchange="feeds")
-                def refresh_feed(url):
-                    try:
-                        return Feed.objects.get(url=url).refresh()
-                    except socket.error, exc:
-                        current.retry(exc=exc)
-
-            Calling the resulting task:
-
-                >>> refresh_feed("http://example.com/rss") # Regular
-                <Feed: http://example.com/rss>
-                >>> refresh_feed.delay("http://example.com/rss") # Async
-                <AsyncResult: 8998d0f4-da0b-4669-ba03-d5ab5ac6ad5d>
-
-    """
-    return task(**dict({"base": PeriodicTask}, **options))
+STATICA_HACK = True
+globals()['kcah_acitats'[::-1].upper()] = False
+if STATICA_HACK:  # pragma: no cover
+    # This is never executed, but tricks static analyzers (PyDev, PyCharm,
+    # pylint, etc.) into knowing the types of these symbols, and what
+    # they contain.
+    from celery.canvas import group, chord, subtask
+    from .base import BaseTask, Task, PeriodicTask, task, periodic_task
+    from .sets import TaskSet
 
 
-@task(name="celery.backend_cleanup")
-def backend_cleanup():
-    backend_cleanup.backend.cleanup()
+class module(LazyModule):
+
+    def __call__(self, *args, **kwargs):
+        return self.task(*args, **kwargs)
+
+
+old_module, new_module = recreate_module(  # pragma: no cover
+    __name__,
+    by_module={
+        'celery.task.base': ['BaseTask', 'Task', 'PeriodicTask',
+                             'task', 'periodic_task'],
+        'celery.canvas': ['group', 'chord', 'subtask'],
+        'celery.task.sets': ['TaskSet'],
+    },
+    base=module,
+    __package__='celery.task',
+    __file__=__file__,
+    __path__=__path__,
+    __doc__=__doc__,
+    current=current,
+    discard_all=Proxy(lambda: current_app.control.purge),
+    backend_cleanup=Proxy(
+        lambda: current_app.tasks['celery.backend_cleanup']
+    ),
+)

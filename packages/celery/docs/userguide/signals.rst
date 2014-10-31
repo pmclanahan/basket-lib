@@ -4,7 +4,6 @@
 Signals
 =======
 
-
 .. contents::
     :local:
 
@@ -22,30 +21,40 @@ Basics
 Several kinds of events trigger signals, you can connect to these signals
 to perform actions as they trigger.
 
-Example connecting to the :signal:`task_sent` signal:
+Example connecting to the :signal:`after_task_publish` signal:
 
 .. code-block:: python
 
-    from celery.signals import task_sent
+    from celery.signals import after_task_publish
 
-    @task_sent.connect
-    def task_sent_handler(sender=None, task_id=None, task=None, args=None,
-                          kwargs=None, \*\*kwds):
-        print("Got signal task_sent for task id %s" % (task_id, ))
+    @after_task_publish.connect
+    def task_sent_handler(sender=None, body=None, **kwargs):
+        print('after_task_publish for task id {body[id]}'.format(
+            body=body,
+        ))
 
 
 Some signals also have a sender which you can filter by. For example the
-:signal:`task_sent` signal uses the task name as a sender, so you can
-connect your handler to be called only when tasks with name `"tasks.add"`
-has been sent by providing the `sender` argument to
-:class:`~celery.utils.dispatch.signal.Signal.connect`:
+:signal:`after_task_publish` signal uses the task name as a sender, so by
+providing the ``sender`` argument to
+:class:`~celery.utils.dispatch.signal.Signal.connect` you can
+connect your handler to be called every time a task with name `"proj.tasks.add"`
+is published:
 
 .. code-block:: python
 
-    @task_sent.connect(task_sent_handler, sender="tasks.add")
-    def task_sent_handler(sender=None, task_id=None, task=None, args=None,
-                          kwargs=None, \*\*kwds):
-        print("Got signal task_sent for task id %s" % (task_id, ))
+    @after_task_publish.connect(sender='proj.tasks.add')
+    def task_sent_handler(sender=None, body=None, **kwargs):
+        print('after_task_publish for task id {body[id]}'.format(
+            body=body,
+        ))
+
+Signals use the same implementation as django.core.dispatch. As a result other
+keyword parameters (e.g. signal) are passed to all signal handlers by default.
+
+The best practice for signal handlers is to accept arbitrary keyword
+arguments (i.e. ``**kwargs``).  That way new celery versions can add additional
+arguments without breaking user code.
 
 .. _signal-ref:
 
@@ -55,36 +64,77 @@ Signals
 Task Signals
 ------------
 
-.. signal:: task_sent
+.. signal:: before_task_publish
 
-task_sent
-~~~~~~~~~
+before_task_publish
+~~~~~~~~~~~~~~~~~~~
+.. versionadded:: 3.1
+
+Dispatched before a task is published.
+Note that this is executed in the process sending the task.
+
+Sender is the name of the task being sent.
+
+Provides arguements:
+
+* body
+
+    Task message body.
+
+    This is a mapping containing the task message fields
+    (see :ref:`task-message-protocol-v1`).
+
+* exchange
+
+    Name of the exchange to send to or a :class:`~kombu.Exchange` object.
+
+* routing_key
+
+    Routing key to use when sending the message.
+
+* headers
+
+    Application headers mapping (can be modified).
+
+* properties
+
+    Message properties (can be modified)
+
+* declare
+
+    List of entities (:class:`~kombu.Exchange`,
+    :class:`~kombu.Queue` or :class:~`kombu.binding` to declare before
+    publishing the message.  Can be modified.
+
+* retry_policy
+
+    Mapping of retry options.  Can be any argument to
+    :meth:`kombu.Connection.ensure` and can be modified.
+
+.. signal:: after_task_publish
+
+after_task_publish
+~~~~~~~~~~~~~~~~~~
 
 Dispatched when a task has been sent to the broker.
-Note that this is executed in the client process, the one sending
-the task, not in the worker.
+Note that this is executed in the process that sent the task.
 
 Sender is the name of the task being sent.
 
 Provides arguments:
 
-* task_id
-    Id of the task to be executed.
+* body
 
-* task
-    The task being executed.
+    The task message body, see :ref:`task-message-protocol-v1`
+    for a reference of possible fields that can be defined.
 
-* args
-    the tasks positional arguments.
+* exchange
 
-* kwargs
-    The tasks keyword arguments.
+    Name of the exchange or :class:`~kombu.Exchange` object used.
 
-* eta
-    The time to execute the task.
+* routing_key
 
-* taskset
-    Id of the taskset this task is part of (if any).
+    Routing key used.
 
 .. signal:: task_prerun
 
@@ -93,7 +143,7 @@ task_prerun
 
 Dispatched before a task is executed.
 
-Sender is the task class being executed.
+Sender is the task object being executed.
 
 Provides arguments:
 
@@ -116,7 +166,7 @@ task_postrun
 
 Dispatched after a task has been executed.
 
-Sender is the task class executed.
+Sender is the task object executed.
 
 Provides arguments:
 
@@ -135,6 +185,50 @@ Provides arguments:
 * retval
     The return value of the task.
 
+* state
+
+    Name of the resulting state.
+
+.. signal:: task_retry
+
+task_retry
+~~~~~~~~~~
+
+Dispatched when a task will be retried.
+
+Sender is the task object.
+
+Provides arguments:
+
+* request
+
+    The current task request.
+
+* reason
+
+    Reason for retry (usually an exception instance, but can always be
+    coerced to :class:`str`).
+
+* einfo
+
+    Detailed exception information, including traceback
+    (a :class:`billiard.einfo.ExceptionInfo` object).
+
+
+.. signal:: task_success
+
+task_success
+~~~~~~~~~~~~
+
+Dispatched when a task succeeds.
+
+Sender is the task object executed.
+
+Provides arguments
+
+* result
+    Return value of the task.
+
 .. signal:: task_failure
 
 task_failure
@@ -142,7 +236,7 @@ task_failure
 
 Dispatched when a task fails.
 
-Sender is the task class executed.
+Sender is the task object executed.
 
 Provides arguments:
 
@@ -164,15 +258,95 @@ Provides arguments:
 * einfo
     The :class:`celery.datastructures.ExceptionInfo` instance.
 
+.. signal:: task_revoked
+
+task_revoked
+~~~~~~~~~~~~
+
+Dispatched when a task is revoked/terminated by the worker.
+
+Sender is the task object revoked/terminated.
+
+Provides arguments:
+
+* request
+
+    This is a :class:`~celery.worker.job.Request` instance, and not
+    ``task.request``.   When using the prefork pool this signal
+    is dispatched in the parent process, so ``task.request`` is not available
+    and should not be used.  Use this object instead, which should have many
+    of the same fields.
+
+* terminated
+    Set to :const:`True` if the task was terminated.
+
+* signum
+    Signal number used to terminate the task. If this is :const:`None` and
+    terminated is :const:`True` then :sig:`TERM` should be assumed.
+
+* expired
+  Set to :const:`True` if the task expired.
+
+App Signals
+-----------
+
+.. signal:: import_modules
+
+import_modules
+~~~~~~~~~~~~~~
+
+This signal is sent when a program (worker, beat, shell) etc, asks
+for modules in the :setting:`CELERY_INCLUDE` and :setting:`CELERY_IMPORTS`
+settings to be imported.
+
+Sender is the app instance.
+
 Worker Signals
 --------------
+
+.. signal:: celeryd_after_setup
+
+celeryd_after_setup
+~~~~~~~~~~~~~~~~~~~
+
+This signal is sent after the worker instance is set up,
+but before it calls run.  This means that any queues from the :option:`-Q`
+option is enabled, logging has been set up and so on.
+
+It can be used to e.g. add custom queues that should always be consumed
+from, disregarding the :option:`-Q` option.  Here's an example
+that sets up a direct queue for each worker, these queues can then be
+used to route a task to any specific worker:
+
+.. code-block:: python
+
+    from celery.signals import celeryd_after_setup
+
+    @celeryd_after_setup.connect
+    def setup_direct_queue(sender, instance, **kwargs):
+        queue_name = '{0}.dq'.format(sender)  # sender is the nodename of the worker
+        instance.app.amqp.queues.select_add(queue_name)
+
+Provides arguments:
+
+* sender
+  Hostname of the worker.
+
+* instance
+    This is the :class:`celery.apps.worker.Worker` instance to be initialized.
+    Note that only the :attr:`app` and :attr:`hostname` (nodename) attributes have been
+    set so far, and the rest of ``__init__`` has not been executed.
+
+* conf
+    The configuration of the current app.
+
 
 .. signal:: celeryd_init
 
 celeryd_init
 ~~~~~~~~~~~~
 
-This is the first signal sent when :program:`celeryd` starts up.
+This is the first signal sent when :program:`celery worker` starts up.
 The ``sender`` is the host name of the worker, so this signal can be used
 to setup worker specific configuration:
 
@@ -180,9 +354,9 @@ to setup worker specific configuration:
 
     from celery.signals import celeryd_init
 
-    @celeryd_init.connect(sender="worker12.example.com")
+    @celeryd_init.connect(sender='worker12@example.com')
     def configure_worker12(conf=None, **kwargs):
-        conf.CELERY_DEFAULT_RATE_LIMIT = "10/m"
+        conf.CELERY_DEFAULT_RATE_LIMIT = '10/m'
 
 or to set up configuration for multiple workers you can omit specifying a
 sender when you connect:
@@ -193,20 +367,28 @@ sender when you connect:
 
     @celeryd_init.connect
     def configure_workers(sender=None, conf=None, **kwargs):
-        if sender in ("worker1.example.com", "worker2.example.com"):
-            conf.CELERY_DEFAULT_RATE_LIMIT = "10/m"
-        if sender == "worker3.example.com":
+        if sender in ('worker1@example.com', 'worker2@example.com'):
+            conf.CELERY_DEFAULT_RATE_LIMIT = '10/m'
+        if sender == 'worker3@example.com':
             conf.CELERYD_PREFETCH_MULTIPLIER = 0
 
 Provides arguments:
 
+* sender
+  Nodename of the worker.
+
 * instance
     This is the :class:`celery.apps.worker.Worker` instance to be initialized.
-    Note that only the :attr:`app` and :attr:`hostname` attributes have been
+    Note that only the :attr:`app` and :attr:`hostname` (nodename) attributes have been
     set so far, and the rest of ``__init__`` has not been executed.
 
 * conf
     The configuration of the current app.
+
+* options
+
+    Options passed to the worker from command-line arguments (including
+    defaults).
 
 .. signal:: worker_init
 
@@ -227,7 +409,32 @@ Dispatched when the worker is ready to accept work.
 worker_process_init
 ~~~~~~~~~~~~~~~~~~~
 
-Dispatched by each new pool worker process when it starts.
+Dispatched in all pool child processes when they start.
+
+Note that handlers attached to this signal must not be blocking
+for more than 4 seconds, or the process will be killed assuming
+it failed to start.
+
+.. signal:: worker_process_shutdown
+
+worker_process_shutdown
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Dispatched in all pool child processes just before they exit.
+
+Note: There is no guarantee that this signal will be dispatched,
+similarly to finally blocks it's impossible to guarantee that handlers
+will be called at shutdown, and if called it may be interrupted during.
+
+Provides arguments:
+
+* pid
+
+    The pid of the child process that is about to shutdown.
+
+* exitcode
+
+    The exitcode that will be used when the child process exits.
 
 .. signal:: worker_shutdown
 
@@ -236,15 +443,15 @@ worker_shutdown
 
 Dispatched when the worker is about to shut down.
 
-Celerybeat Signals
-------------------
+Beat Signals
+------------
 
 .. signal:: beat_init
 
 beat_init
 ~~~~~~~~~
 
-Dispatched when celerybeat starts (either standalone or embedded).
+Dispatched when :program:`celery beat` starts (either standalone or embedded).
 Sender is the :class:`celery.beat.Service` instance.
 
 .. signal:: beat_embedded_init
@@ -252,8 +459,8 @@ Sender is the :class:`celery.beat.Service` instance.
 beat_embedded_init
 ~~~~~~~~~~~~~~~~~~
 
-Dispatched in addition to the :signal:`beat_init` signal when celerybeat is
-started as an embedded process.  Sender is the
+Dispatched in addition to the :signal:`beat_init` signal when :program:`celery
+beat` is started as an embedded process.  Sender is the
 :class:`celery.beat.Service` instance.
 
 Eventlet Signals
@@ -389,3 +596,59 @@ Provides arguments:
 
 * colorize
     Specify if log messages are colored or not.
+
+Command signals
+---------------
+
+.. signal:: user_preload_options
+
+user_preload_options
+~~~~~~~~~~~~~~~~~~~~
+
+This signal is sent after any of the Celery command line programs
+are finished parsing the user preload options.
+
+It can be used to add additional command-line arguments to the
+:program:`celery` umbrella command:
+
+.. code-block:: python
+
+    from celery import Celery
+    from celery import signals
+    from celery.bin.base import Option
+
+    app = Celery()
+    app.user_options['preload'].add(Option(
+        '--monitoring', action='store_true',
+        help='Enable our external monitoring utility, blahblah',
+    ))
+
+    @signals.user_preload_options.connect
+    def handle_preload_options(options, **kwargs):
+        if options['monitoring']:
+            enable_monitoring()
+
+
+Sender is the :class:`~celery.bin.base.Command` instance, which depends
+on what program was called (e.g. for the umbrella command it will be
+a :class:`~celery.bin.celery.CeleryCommand`) object).
+
+Provides arguments:
+
+* app
+
+    The app instance.
+
+* options
+
+    Mapping of the parsed user preload options (with default values).
+
+Deprecated Signals
+------------------
+
+.. signal:: task_sent
+
+task_sent
+~~~~~~~~~
+
+This signal is deprecated, please use :signal:`after_task_publish` instead.

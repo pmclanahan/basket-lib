@@ -19,36 +19,39 @@
 #    ...                           A_callback.subtask()), countdown=1)
 
 
-from celery.task import chord, subtask, task, TaskSet
-from celery.result import AsyncResult, ResultSet
+from celery import chord, group, task, signature, uuid
+from celery.result import AsyncResult, ResultSet, allow_join_result
 from collections import deque
 
-@task
+
+@task()
 def add(x, y):
     return x + y
 
 
-@task
+@task()
 def make_request(id, url):
-    print("GET %r" % (url, ))
+    print('GET {0!r}'.format(url))
     return url
 
 
-@task
+@task()
 def B_callback(urls, id):
-    print("batch %s done" % (id, ))
+    print('batch {0} done'.format(id))
     return urls
 
 
-@task
+@task()
 def B(id):
-    return chord(make_request.subtask((id, "%s %r" % (id, i, )))
-                    for i in xrange(10))(B_callback.subtask((id, )))
+    return chord(
+        make_request.s(id, '{0} {1!r}'.format(id, i))
+        for i in range(10)
+    )(B_callback.s(id))
 
 
-@task
+@task()
 def A():
-    return TaskSet(B.subtask((c, )) for c in "ABCDEFGH").apply_async()
+    return group(B.s(c) for c in 'ABCDEFGH').apply_async()
 
 
 def joinall(R, timeout=None, propagate=True):
@@ -70,21 +73,22 @@ def joinall(R, timeout=None, propagate=True):
             yield res
 
 
-@task
-def unlock_graph(result, callback, interval=1, propagate=False,
-        max_retries=None):
+@task()
+def unlock_graph(result, callback,
+                 interval=1, propagate=False, max_retries=None):
     if result.ready():
         second_level_res = result.get()
         if second_level_res.ready():
-            subtask(callback).delay(list(joinall(
-                second_level_res, propagate=propagate)))
+            with allow_join_result():
+                signature(callback).delay(list(joinall(
+                    second_level_res, propagate=propagate)))
     else:
         unlock_graph.retry(countdown=interval, max_retries=max_retries)
 
 
-@task
+@task()
 def A_callback(res):
-    print("Everything is done: %r" % (res, ))
+    print('Everything is done: {0!r}'.format(res))
     return res
 
 
@@ -95,5 +99,5 @@ class chord2(object):
         self.options = options
 
     def __call__(self, body, **options):
-        body.options.setdefault("task_id", uuid())
+        body.options.setdefault('task_id', uuid())
         unlock_graph.apply_async()

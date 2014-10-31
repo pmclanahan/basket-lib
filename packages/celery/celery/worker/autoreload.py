@@ -6,9 +6,7 @@
     This module implements automatic module reloading
 """
 from __future__ import absolute_import
-from __future__ import with_statement
 
-import errno
 import hashlib
 import os
 import select
@@ -16,46 +14,65 @@ import sys
 import time
 
 from collections import defaultdict
+from threading import Event
 
-from ..abstract import StartStopComponent
-from ..utils import module_file
-from ..utils.threads import bgThread, Event
+from kombu.utils import eventio
+from kombu.utils.encoding import ensure_bytes
 
-try:
+from celery import bootsteps
+from celery.five import items
+from celery.platforms import ignore_errno
+from celery.utils.imports import module_file
+from celery.utils.log import get_logger
+from celery.utils.threads import bgThread
+
+from .components import Pool
+
+try:                        # pragma: no cover
     import pyinotify
     _ProcessEvent = pyinotify.ProcessEvent
-except ImportError:
+except ImportError:         # pragma: no cover
     pyinotify = None        # noqa
     _ProcessEvent = object  # noqa
 
+__all__ = [
+    'WorkerComponent', 'Autoreloader', 'Monitor', 'BaseMonitor',
+    'StatMonitor', 'KQueueMonitor', 'InotifyMonitor', 'file_hash',
+]
 
-class WorkerComponent(StartStopComponent):
-    name = "worker.autoreloader"
-    requires = ("pool", )
+logger = get_logger(__name__)
+
+
+class WorkerComponent(bootsteps.StartStopStep):
+    label = 'Autoreloader'
+    conditional = True
+    requires = (Pool, )
 
     def __init__(self, w, autoreload=None, **kwargs):
         self.enabled = w.autoreload = autoreload
         w.autoreloader = None
 
     def create(self, w):
-        w.autoreloader = self.instantiate(w.autoreloader_cls,
-                                          controller=w,
-                                          logger=w.logger)
-        return w.autoreloader
+        w.autoreloader = self.instantiate(w.autoreloader_cls, w)
+        return w.autoreloader if not w.use_eventloop else None
+
+    def register_with_event_loop(self, w, hub):
+        w.autoreloader.register_with_event_loop(hub)
+        hub.on_close.add(w.autoreloader.on_event_loop_close)
 
 
-def file_hash(filename, algorithm="md5"):
+def file_hash(filename, algorithm='md5'):
     hobj = hashlib.new(algorithm)
-    with open(filename, "rb") as f:
+    with open(filename, 'rb') as f:
         for chunk in iter(lambda: f.read(2 ** 20), ''):
-            hobj.update(chunk)
+            hobj.update(ensure_bytes(chunk))
     return hobj.digest()
 
 
 class BaseMonitor(object):
 
-    def __init__(self, files, on_change=None, shutdown_event=None,
-            interval=0.5):
+    def __init__(self, files,
+                 on_change=None, shutdown_event=None, interval=0.5):
         self.files = files
         self.interval = interval
         self._on_change = on_change
@@ -63,7 +80,7 @@ class BaseMonitor(object):
         self.shutdown_event = shutdown_event or Event()
 
     def start(self):
-        raise NotImplementedError("Subclass responsibility")
+        raise NotImplementedError('Subclass responsibility')
 
     def stop(self):
         pass
@@ -71,6 +88,9 @@ class BaseMonitor(object):
     def on_change(self, modified):
         if self._on_change:
             return self._on_change(modified)
+
+    def on_event_loop_close(self, hub):
+        pass
 
 
 class StatMonitor(BaseMonitor):
@@ -82,13 +102,20 @@ class StatMonitor(BaseMonitor):
     def _maybe_modified(self, f, mt):
         return mt is not None and self.modify_times[f] != mt
 
+    def register_with_event_loop(self, hub):
+        hub.call_repeatedly(2.0, self.find_changes)
+
+    def find_changes(self):
+        maybe_modified = self._maybe_modified
+        modified = dict((f, mt) for f, mt in self._mtimes()
+                        if maybe_modified(f, mt))
+        if modified:
+            self.on_change(modified)
+            self.modify_times.update(modified)
+
     def start(self):
         while not self.shutdown_event.is_set():
-            modified = dict((f, mt) for f, mt in self._mtimes()
-                                if self._maybe_modified(f, mt))
-            if modified:
-                self.on_change(modified.keys())
-                self.modify_times.update(modified)
+            self.find_changes()
             time.sleep(self.interval)
 
     @staticmethod
@@ -103,43 +130,48 @@ class KQueueMonitor(BaseMonitor):
     """File change monitor based on BSD kernel event notifications"""
 
     def __init__(self, *args, **kwargs):
-        assert hasattr(select, "kqueue")
         super(KQueueMonitor, self).__init__(*args, **kwargs)
         self.filemap = dict((f, None) for f in self.files)
+        self.fdmap = {}
 
-    def start(self):
-        self._kq = select.kqueue()
-        kevents = []
+    def register_with_event_loop(self, hub):
+        if eventio.kqueue is not None:
+            self._kq = eventio._kqueue()
+            self.add_events(self._kq)
+            self._kq.on_file_change = self.handle_event
+            hub.add_reader(self._kq._kqueue, self._kq.poll, 0)
+
+    def on_event_loop_close(self, hub):
+        self.close(self._kq)
+
+    def add_events(self, poller):
         for f in self.filemap:
             self.filemap[f] = fd = os.open(f, os.O_RDONLY)
+            self.fdmap[fd] = f
+            poller.watch_file(fd)
 
-            ev = select.kevent(fd,
-                    filter=select.KQ_FILTER_VNODE,
-                    flags=select.KQ_EV_ADD |
-                            select.KQ_EV_ENABLE |
-                            select.KQ_EV_CLEAR,
-                    fflags=select.KQ_NOTE_WRITE |
-                            select.KQ_NOTE_EXTEND)
-            kevents.append(ev)
+    def handle_event(self, events):
+        self.on_change([self.fdmap[e.ident] for e in events])
 
-        events = self._kq.control(kevents, 0)
+    def start(self):
+        self.poller = eventio.poll()
+        self.add_events(self.poller)
+        self.poller.on_file_change = self.handle_event
         while not self.shutdown_event.is_set():
-            events = self._kq.control(kevents, 1)
-            fds = [e.ident for e in events]
-            modified = [k for k, v in self.filemap.iteritems()
-                                        if v in fds]
-            self.on_change(modified)
+            self.poller.poll(1)
+
+    def close(self, poller):
+        for f, fd in items(self.filemap):
+            if fd is not None:
+                poller.unregister(fd)
+                with ignore_errno('EBADF'):  # pragma: no cover
+                    os.close(fd)
+        self.filemap.clear()
+        self.fdmap.clear()
 
     def stop(self):
-        self._kq.close()
-        for fd in filter(None, self.filemap.values()):
-            try:
-                os.close(fd)
-            except OSError, exc:
-                if exc != errno.EBADF:
-                    raise
-            self.filemap[fd] = None
-        self.filemap.clear()
+        self.close(self.poller)
+        self.poller.close()
 
 
 class InotifyMonitor(_ProcessEvent):
@@ -152,13 +184,28 @@ class InotifyMonitor(_ProcessEvent):
         self._wm = None
         self._notifier = None
 
+    def register_with_event_loop(self, hub):
+        self.create_notifier()
+        hub.add_reader(self._wm.get_fd(), self.on_readable)
+
+    def on_event_loop_close(self, hub):
+        pass
+
+    def on_readable(self):
+        self._notifier.read_events()
+        self._notifier.process_events()
+
+    def create_notifier(self):
+        self._wm = pyinotify.WatchManager()
+        self._notifier = pyinotify.Notifier(self._wm, self)
+        add_watch = self._wm.add_watch
+        flags = pyinotify.IN_MODIFY | pyinotify.IN_ATTRIB
+        for m in self._modules:
+            add_watch(m, flags)
+
     def start(self):
         try:
-            self._wm = pyinotify.WatchManager()
-            self._notifier = pyinotify.Notifier(self._wm, self)
-            for m in self._modules:
-                self._wm.add_watch(m,
-                        pyinotify.IN_MODIFY | pyinotify.IN_ATTRIB)
+            self.create_notifier()
             self._notifier.loop()
         finally:
             if self._wm:
@@ -180,60 +227,71 @@ class InotifyMonitor(_ProcessEvent):
 
 
 def default_implementation():
-    # kqueue monitor not working properly at this time.
-    if hasattr(select, "kqueue"):
-        return "kqueue"
-    if sys.platform.startswith("linux") and pyinotify:
-        return "inotify"
+    if hasattr(select, 'kqueue') and eventio.kqueue is not None:
+        return 'kqueue'
+    elif sys.platform.startswith('linux') and pyinotify:
+        return 'inotify'
     else:
-        return "stat"
+        return 'stat'
 
-implementations = {"kqueue": KQueueMonitor,
-                   "inotify": InotifyMonitor,
-                   "stat": StatMonitor}
+implementations = {'kqueue': KQueueMonitor,
+                   'inotify': InotifyMonitor,
+                   'stat': StatMonitor}
 Monitor = implementations[
-            os.environ.get("CELERYD_FSNOTIFY") or default_implementation()]
+    os.environ.get('CELERYD_FSNOTIFY') or default_implementation()]
 
 
 class Autoreloader(bgThread):
     """Tracks changes in modules and fires reload commands"""
     Monitor = Monitor
 
-    def __init__(self, controller, modules=None, monitor_cls=None,
-            logger=None, **options):
+    def __init__(self, controller, modules=None, monitor_cls=None, **options):
         super(Autoreloader, self).__init__()
         self.controller = controller
         app = self.controller.app
         self.modules = app.loader.task_modules if modules is None else modules
-        self.logger = logger
         self.options = options
-        self.Monitor = monitor_cls or self.Monitor
         self._monitor = None
         self._hashes = None
+        self.file_to_module = {}
+
+    def on_init(self):
+        files = self.file_to_module
+        files.update(dict(
+            (module_file(sys.modules[m]), m) for m in self.modules))
+
+        self._monitor = self.Monitor(
+            files, self.on_change,
+            shutdown_event=self._is_shutdown, **self.options)
+        self._hashes = dict([(f, file_hash(f)) for f in files])
+
+    def register_with_event_loop(self, hub):
+        if self._monitor is None:
+            self.on_init()
+        self._monitor.register_with_event_loop(hub)
+
+    def on_event_loop_close(self, hub):
+        if self._monitor is not None:
+            self._monitor.on_event_loop_close(hub)
 
     def body(self):
-        files = [module_file(sys.modules[m]) for m in self.modules]
-        self._monitor = self.Monitor(files, self.on_change,
-                shutdown_event=self._is_shutdown, **self.options)
-        self._hashes = dict([(f, file_hash(f)) for f in files])
-        try:
+        self.on_init()
+        with ignore_errno('EINTR', 'EAGAIN'):
             self._monitor.start()
-        except OSError, exc:
-            if exc.errno not in (errno.EINTR, errno.EAGAIN):
-                raise
 
     def _maybe_modified(self, f):
-        digest = file_hash(f)
-        if digest != self._hashes[f]:
-            self._hashes[f] = digest
-            return True
+        if os.path.exists(f):
+            digest = file_hash(f)
+            if digest != self._hashes[f]:
+                self._hashes[f] = digest
+                return True
         return False
 
     def on_change(self, files):
         modified = [f for f in files if self._maybe_modified(f)]
         if modified:
-            names = [self._module_name(module) for module in modified]
-            self.logger.info("Detected modified modules: %r", names)
+            names = [self.file_to_module[module] for module in modified]
+            logger.info('Detected modified modules: %r', names)
             self._reload(names)
 
     def _reload(self, modules):
@@ -242,7 +300,3 @@ class Autoreloader(bgThread):
     def stop(self):
         if self._monitor:
             self._monitor.stop()
-
-    @staticmethod
-    def _module_name(path):
-        return os.path.splitext(os.path.basename(path))[0]

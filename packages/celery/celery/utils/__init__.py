@@ -5,179 +5,180 @@
 
     Utility functions.
 
-    :copyright: (c) 2009 - 2012 by Ask Solem.
-    :license: BSD, see LICENSE for more details.
-
 """
-from __future__ import absolute_import
-from __future__ import with_statement
+from __future__ import absolute_import, print_function
 
+import numbers
 import os
+import re
+import socket
 import sys
-import operator
-import imp as _imp
-import importlib
-import logging
-import threading
 import traceback
 import warnings
+import datetime
 
-from contextlib import contextmanager
+from collections import Callable
 from functools import partial, wraps
 from inspect import getargspec
-from itertools import islice
 from pprint import pprint
 
-from kombu.utils import cached_property, gen_unique_id, kwdict  # noqa
-from kombu.utils import reprcall, reprkwargs                    # noqa
-from kombu.utils.functional import promise, maybe_promise       # noqa
-uuid = gen_unique_id
+from kombu.entity import Exchange, Queue
 
-from ..exceptions import CPendingDeprecationWarning, CDeprecationWarning
-from .compat import StringIO, reload
+from celery.exceptions import CPendingDeprecationWarning, CDeprecationWarning
+from celery.five import WhateverIO, items, reraise, string_t
 
-LOG_LEVELS = dict(logging._levelNames)
-LOG_LEVELS["FATAL"] = logging.FATAL
-LOG_LEVELS[logging.FATAL] = "FATAL"
+__all__ = ['worker_direct', 'warn_deprecated', 'deprecated', 'lpmerge',
+           'is_iterable', 'isatty', 'cry', 'maybe_reraise', 'strtobool',
+           'jsonify', 'gen_task_name', 'nodename', 'nodesplit',
+           'cached_property']
+
+PY3 = sys.version_info[0] == 3
+
 
 PENDING_DEPRECATION_FMT = """
-    %(description)s is scheduled for deprecation in \
-    version %(deprecation)s and removal in version v%(removal)s. \
-    %(alternative)s
+    {description} is scheduled for deprecation in \
+    version {deprecation} and removal in version v{removal}. \
+    {alternative}
 """
 
 DEPRECATION_FMT = """
-    %(description)s is deprecated and scheduled for removal in
-    version %(removal)s. %(alternative)s
+    {description} is deprecated and scheduled for removal in
+    version {removal}. {alternative}
 """
 
+#: Billiard sets this when execv is enabled.
+#: We use it to find out the name of the original ``__main__``
+#: module, so that we can properly rewrite the name of the
+#: task to be that of ``App.main``.
+MP_MAIN_FILE = os.environ.get('MP_MAIN_FILE') or None
 
-def warn_deprecated(description=None, deprecation=None, removal=None,
-        alternative=None):
-    ctx = {"description": description,
-           "deprecation": deprecation, "removal": removal,
-           "alternative": alternative}
+#: Exchange for worker direct queues.
+WORKER_DIRECT_EXCHANGE = Exchange('C.dq')
+
+#: Format for worker direct queue names.
+WORKER_DIRECT_QUEUE_FORMAT = '{hostname}.dq'
+
+#: Separator for worker node name and hostname.
+NODENAME_SEP = '@'
+
+NODENAME_DEFAULT = 'celery'
+RE_FORMAT = re.compile(r'%(\w)')
+
+
+def worker_direct(hostname):
+    """Return :class:`kombu.Queue` that is a direct route to
+    a worker by hostname.
+
+    :param hostname: The fully qualified node name of a worker
+                     (e.g. ``w1@example.com``).  If passed a
+                     :class:`kombu.Queue` instance it will simply return
+                     that instead.
+    """
+    if isinstance(hostname, Queue):
+        return hostname
+    return Queue(WORKER_DIRECT_QUEUE_FORMAT.format(hostname=hostname),
+                 WORKER_DIRECT_EXCHANGE,
+                 hostname, auto_delete=True)
+
+
+def warn_deprecated(description=None, deprecation=None,
+                    removal=None, alternative=None, stacklevel=2):
+    ctx = {'description': description,
+           'deprecation': deprecation, 'removal': removal,
+           'alternative': alternative}
     if deprecation is not None:
-        w = CPendingDeprecationWarning(PENDING_DEPRECATION_FMT % ctx)
+        w = CPendingDeprecationWarning(PENDING_DEPRECATION_FMT.format(**ctx))
     else:
-        w = CDeprecationWarning(DEPRECATION_FMT % ctx)
-    warnings.warn(w)
+        w = CDeprecationWarning(DEPRECATION_FMT.format(**ctx))
+    warnings.warn(w, stacklevel=stacklevel)
 
 
-def deprecated(description=None, deprecation=None, removal=None,
-        alternative=None):
+def deprecated(deprecation=None, removal=None,
+               alternative=None, description=None):
+    """Decorator for deprecated functions.
 
+    A deprecation warning will be emitted when the function is called.
+
+    :keyword deprecation: Version that marks first deprecation, if this
+      argument is not set a ``PendingDeprecationWarning`` will be emitted
+      instead.
+    :keyword removal:  Future version when this feature will be removed.
+    :keyword alternative:  Instructions for an alternative solution (if any).
+    :keyword description: Description of what is being deprecated.
+
+    """
     def _inner(fun):
 
         @wraps(fun)
         def __inner(*args, **kwargs):
+            from .imports import qualname
             warn_deprecated(description=description or qualname(fun),
                             deprecation=deprecation,
                             removal=removal,
-                            alternative=alternative)
+                            alternative=alternative,
+                            stacklevel=3)
             return fun(*args, **kwargs)
         return __inner
     return _inner
 
 
+def deprecated_property(deprecation=None, removal=None,
+                        alternative=None, description=None):
+    def _inner(fun):
+        return _deprecated_property(
+            fun, deprecation=deprecation, removal=removal,
+            alternative=alternative, description=description or fun.__name__)
+    return _inner
+
+
+class _deprecated_property(object):
+
+    def __init__(self, fget=None, fset=None, fdel=None, doc=None, **depreinfo):
+        self.__get = fget
+        self.__set = fset
+        self.__del = fdel
+        self.__name__, self.__module__, self.__doc__ = (
+            fget.__name__, fget.__module__, fget.__doc__,
+        )
+        self.depreinfo = depreinfo
+        self.depreinfo.setdefault('stacklevel', 3)
+
+    def __get__(self, obj, type=None):
+        if obj is None:
+            return self
+        warn_deprecated(**self.depreinfo)
+        return self.__get(obj)
+
+    def __set__(self, obj, value):
+        if obj is None:
+            return self
+        if self.__set is None:
+            raise AttributeError('cannot set attribute')
+        warn_deprecated(**self.depreinfo)
+        self.__set(obj, value)
+
+    def __delete__(self, obj):
+        if obj is None:
+            return self
+        if self.__del is None:
+            raise AttributeError('cannot delete attribute')
+        warn_deprecated(**self.depreinfo)
+        self.__del(obj)
+
+    def setter(self, fset):
+        return self.__class__(self.__get, fset, self.__del, **self.depreinfo)
+
+    def deleter(self, fdel):
+        return self.__class__(self.__get, self.__set, fdel, **self.depreinfo)
+
+
 def lpmerge(L, R):
-    """Left precedent dictionary merge.  Keeps values from `l`, if the value
-    in `r` is :const:`None`."""
-    return dict(L, **dict((k, v) for k, v in R.iteritems() if v is not None))
+    """In place left precedent dictionary merge.
 
-
-class mpromise(promise):
-    """Memoized promise.
-
-    The function is only evaluated once, every subsequent access
-    will return the same value.
-
-    .. attribute:: evaluated
-
-        Set to to :const:`True` after the promise has been evaluated.
-
-    """
-    evaluated = False
-    _value = None
-
-    def evaluate(self):
-        if not self.evaluated:
-            self._value = super(mpromise, self).evaluate()
-            self.evaluated = True
-        return self._value
-
-
-def noop(*args, **kwargs):
-    """No operation.
-
-    Takes any arguments/keyword arguments and does nothing.
-
-    """
-    pass
-
-
-def first(predicate, iterable):
-    """Returns the first element in `iterable` that `predicate` returns a
-    :const:`True` value for."""
-    for item in iterable:
-        if predicate(item):
-            return item
-
-
-def firstmethod(method):
-    """Returns a functions that with a list of instances,
-    finds the first instance that returns a value for the given method.
-
-    The list can also contain promises (:class:`promise`.)
-
-    """
-
-    def _matcher(seq, *args, **kwargs):
-        for cls in seq:
-            try:
-                answer = getattr(maybe_promise(cls), method)(*args, **kwargs)
-                if answer is not None:
-                    return answer
-            except AttributeError:
-                pass
-    return _matcher
-
-
-def chunks(it, n):
-    """Split an iterator into chunks with `n` elements each.
-
-    Examples
-
-        # n == 2
-        >>> x = chunks(iter([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), 2)
-        >>> list(x)
-        [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10]]
-
-        # n == 3
-        >>> x = chunks(iter([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), 3)
-        >>> list(x)
-        [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10]]
-
-    """
-    for first in it:
-        yield [first] + list(islice(it, n - 1))
-
-
-def padlist(container, size, default=None):
-    """Pad list with default elements.
-
-    Examples:
-
-        >>> first, last, city = padlist(["George", "Costanza", "NYC"], 3)
-        ("George", "Costanza", "NYC")
-        >>> first, last, city = padlist(["George", "Costanza"], 3)
-        ("George", "Costanza", None)
-        >>> first, last, city, planet = padlist(["George", "Costanza",
-                                                 "NYC"], 4, default="Earth")
-        ("George", "Costanza", "NYC", "Earth")
-
-    """
-    return list(container)[:size] + [default] * (size - len(container))
+    Keeps values from `L`, if the value in `R` is :const:`None`."""
+    set = L.__setitem__
+    [set(k, v) for k, v in items(R) if v is not None]
+    return L
 
 
 def is_iterable(obj):
@@ -188,277 +189,209 @@ def is_iterable(obj):
     return True
 
 
-def mattrgetter(*attrs):
-    """Like :func:`operator.itemgetter` but returns :const:`None` on missing
-    attributes instead of raising :exc:`AttributeError`."""
-    return lambda obj: dict((attr, getattr(obj, attr, None))
-                                for attr in attrs)
-
-
-if sys.version_info >= (3, 3):
-
-    def qualname(obj):
-        return obj.__qualname__
-
-else:
-
-    def qualname(obj):  # noqa
-        if not hasattr(obj, "__name__") and hasattr(obj, "__class__"):
-            return qualname(obj.__class__)
-
-        return '.'.join([obj.__module__, obj.__name__])
-get_full_cls_name = qualname  # XXX Compat
-
-
 def fun_takes_kwargs(fun, kwlist=[]):
-    """With a function, and a list of keyword arguments, returns arguments
-    in the list which the function takes.
-
-    If the object has an `argspec` attribute that is used instead
-    of using the :meth:`inspect.getargspec` introspection.
-
-    :param fun: The function to inspect arguments of.
-    :param kwlist: The list of keyword arguments.
-
-    Examples
-
-        >>> def foo(self, x, y, logfile=None, loglevel=None):
-        ...     return x * y
-        >>> fun_takes_kwargs(foo, ["logfile", "loglevel", "task_id"])
-        ["logfile", "loglevel"]
-
-        >>> def foo(self, x, y, **kwargs):
-        >>> fun_takes_kwargs(foo, ["logfile", "loglevel", "task_id"])
-        ["logfile", "loglevel", "task_id"]
-
-    """
-    argspec = getattr(fun, "argspec", getargspec(fun))
-    args, _varargs, keywords, _defaults = argspec
-    if keywords != None:
+    # deprecated
+    S = getattr(fun, 'argspec', getargspec(fun))
+    if S.keywords is not None:
         return kwlist
-    return filter(partial(operator.contains, args), kwlist)
-
-
-def get_cls_by_name(name, aliases={}, imp=None, package=None,
-        sep='.', **kwargs):
-    """Get class by name.
-
-    The name should be the full dot-separated path to the class::
-
-        modulename.ClassName
-
-    Example::
-
-        celery.concurrency.processes.TaskPool
-                                    ^- class name
-
-    or using ':' to separate module and symbol::
-
-        celery.concurrency.processes:TaskPool
-
-    If `aliases` is provided, a dict containing short name/long name
-    mappings, the name is looked up in the aliases first.
-
-    Examples:
-
-        >>> get_cls_by_name("celery.concurrency.processes.TaskPool")
-        <class 'celery.concurrency.processes.TaskPool'>
-
-        >>> get_cls_by_name("default", {
-        ...     "default": "celery.concurrency.processes.TaskPool"})
-        <class 'celery.concurrency.processes.TaskPool'>
-
-        # Does not try to look up non-string names.
-        >>> from celery.concurrency.processes import TaskPool
-        >>> get_cls_by_name(TaskPool) is TaskPool
-        True
-
-    """
-    if imp is None:
-        imp = importlib.import_module
-
-    if not isinstance(name, basestring):
-        return name                                 # already a class
-
-    name = aliases.get(name) or name
-    sep = ':' if ':' in name else sep
-    module_name, _, cls_name = name.rpartition(sep)
-    if not module_name and package:
-        module_name = package
-    try:
-        module = imp(module_name, package=package, **kwargs)
-    except ValueError, exc:
-        raise ValueError, ValueError(
-                "Couldn't import %r: %s" % (name, exc)), sys.exc_info()[2]
-    return getattr(module, cls_name)
-
-get_symbol_by_name = get_cls_by_name
-
-
-def instantiate(name, *args, **kwargs):
-    """Instantiate class by name.
-
-    See :func:`get_cls_by_name`.
-
-    """
-    return get_cls_by_name(name)(*args, **kwargs)
-
-
-def truncate_text(text, maxlen=128, suffix="..."):
-    """Truncates text to a maximum number of characters."""
-    if len(text) >= maxlen:
-        return text[:maxlen].rsplit(" ", 1)[0] + suffix
-    return text
-
-
-def pluralize(n, text, suffix='s'):
-    if n > 1:
-        return text + suffix
-    return text
-
-
-def abbr(S, max, ellipsis="..."):
-    if S is None:
-        return "???"
-    if len(S) > max:
-        return ellipsis and (S[:max - len(ellipsis)] + ellipsis) or S[:max]
-    return S
-
-
-def abbrtask(S, max):
-    if S is None:
-        return "???"
-    if len(S) > max:
-        module, _, cls = S.rpartition(".")
-        module = abbr(module, max - len(cls) - 3, False)
-        return module + "[.]" + cls
-    return S
+    return [kw for kw in kwlist if kw in S.args]
 
 
 def isatty(fh):
-    # Fixes bug with mod_wsgi:
-    #   mod_wsgi.Log object has no attribute isatty.
-    return getattr(fh, "isatty", None) and fh.isatty()
+    try:
+        return fh.isatty()
+    except AttributeError:
+        pass
 
 
-def textindent(t, indent=0):
-        """Indent text."""
-        return "\n".join(" " * indent + p for p in t.split("\n"))
+def cry(out=None, sepchr='=', seplen=49):  # pragma: no cover
+    """Return stacktrace of all active threads,
+    taken from https://gist.github.com/737056."""
+    import threading
 
+    out = WhateverIO() if out is None else out
+    P = partial(print, file=out)
 
-@contextmanager
-def cwd_in_path():
-    cwd = os.getcwd()
-    if cwd in sys.path:
-        yield
-    else:
-        sys.path.insert(0, cwd)
-        try:
-            yield cwd
-        finally:
-            try:
-                sys.path.remove(cwd)
-            except ValueError:
-                pass
-
-
-class NotAPackage(Exception):
-    pass
-
-
-def find_module(module, path=None, imp=None):
-    """Version of :func:`imp.find_module` supporting dots."""
-    if imp is None:
-        imp = importlib.import_module
-    with cwd_in_path():
-        if "." in module:
-            last = None
-            parts = module.split(".")
-            for i, part in enumerate(parts[:-1]):
-                mpart = imp(".".join(parts[:i + 1]))
-                try:
-                    path = mpart.__path__
-                except AttributeError:
-                    raise NotAPackage(module)
-                last = _imp.find_module(parts[i + 1], path)
-            return last
-        return _imp.find_module(module)
-
-
-def import_from_cwd(module, imp=None, package=None):
-    """Import module, but make sure it finds modules
-    located in the current directory.
-
-    Modules located in the current directory has
-    precedence over modules located in `sys.path`.
-    """
-    if imp is None:
-        imp = importlib.import_module
-    with cwd_in_path():
-        return imp(module, package=package)
-
-
-def reload_from_cwd(module, reloader=None):
-    if reloader is None:
-        reloader = reload
-    with cwd_in_path():
-        return reloader(module)
-
-
-def cry():  # pragma: no cover
-    """Return stacktrace of all active threads.
-
-    From https://gist.github.com/737056
-
-    """
-    tmap = {}
-    main_thread = None
     # get a map of threads by their ID so we can print their names
     # during the traceback dump
-    for t in threading.enumerate():
-        if getattr(t, "ident", None):
-            tmap[t.ident] = t
-        else:
-            main_thread = t
+    tmap = dict((t.ident, t) for t in threading.enumerate())
 
-    out = StringIO()
-    sep = "=" * 49 + "\n"
-    for tid, frame in sys._current_frames().iteritems():
-        thread = tmap.get(tid, main_thread)
+    sep = sepchr * seplen
+    for tid, frame in items(sys._current_frames()):
+        thread = tmap.get(tid)
         if not thread:
             # skip old junk (left-overs from a fork)
             continue
-        out.write("%s\n" % (thread.getName(), ))
-        out.write(sep)
+        P('{0.name}'.format(thread))
+        P(sep)
         traceback.print_stack(frame, file=out)
-        out.write(sep)
-        out.write("LOCAL VARIABLES\n")
-        out.write(sep)
+        P(sep)
+        P('LOCAL VARIABLES')
+        P(sep)
         pprint(frame.f_locals, stream=out)
-        out.write("\n\n")
+        P('\n')
     return out.getvalue()
 
 
-def uniq(it):
-    seen = set()
-    for obj in it:
-        if obj not in seen:
-            yield obj
-            seen.add(obj)
-
-
 def maybe_reraise():
-    """Reraise if an exception is currently being handled, or return
+    """Re-raise if an exception is currently being handled, or return
     otherwise."""
-    type_, exc, tb = sys.exc_info()
+    exc_info = sys.exc_info()
     try:
-        if tb:
-            raise type_, exc, tb
+        if exc_info[2]:
+            reraise(exc_info[0], exc_info[1], exc_info[2])
     finally:
         # see http://docs.python.org/library/sys.html#sys.exc_info
-        del(tb)
+        del(exc_info)
 
 
-def module_file(module):
-    name = module.__file__
-    return name[:-1] if name.endswith(".pyc") else name
+def strtobool(term, table={'false': False, 'no': False, '0': False,
+                           'true': True, 'yes': True, '1': True,
+                           'on': True, 'off': False}):
+    """Convert common terms for true/false to bool
+    (true/false/yes/no/on/off/1/0)."""
+    if isinstance(term, string_t):
+        try:
+            return table[term.lower()]
+        except KeyError:
+            raise TypeError('Cannot coerce {0!r} to type bool'.format(term))
+    return term
+
+
+def jsonify(obj,
+            builtin_types=(numbers.Real, string_t), key=None,
+            keyfilter=None,
+            unknown_type_filter=None):
+    """Transforms object making it suitable for json serialization"""
+    from kombu.abstract import Object as KombuDictType
+    _jsonify = partial(jsonify, builtin_types=builtin_types, key=key,
+                       keyfilter=keyfilter,
+                       unknown_type_filter=unknown_type_filter)
+
+    if isinstance(obj, KombuDictType):
+        obj = obj.as_dict(recurse=True)
+
+    if obj is None or isinstance(obj, builtin_types):
+        return obj
+    elif isinstance(obj, (tuple, list)):
+        return [_jsonify(v) for v in obj]
+    elif isinstance(obj, dict):
+        return dict((k, _jsonify(v, key=k))
+                    for k, v in items(obj)
+                    if (keyfilter(k) if keyfilter else 1))
+    elif isinstance(obj, datetime.datetime):
+        # See "Date Time String Format" in the ECMA-262 specification.
+        r = obj.isoformat()
+        if obj.microsecond:
+            r = r[:23] + r[26:]
+        if r.endswith('+00:00'):
+            r = r[:-6] + 'Z'
+        return r
+    elif isinstance(obj, datetime.date):
+        return obj.isoformat()
+    elif isinstance(obj, datetime.time):
+        r = obj.isoformat()
+        if obj.microsecond:
+            r = r[:12]
+        return r
+    elif isinstance(obj, datetime.timedelta):
+        return str(obj)
+    else:
+        if unknown_type_filter is None:
+            raise ValueError(
+                'Unsupported type: {0!r} {1!r} (parent: {2})'.format(
+                    type(obj), obj, key))
+        return unknown_type_filter(obj)
+
+
+def gen_task_name(app, name, module_name):
+    """Generate task name from name/module pair."""
+    try:
+        module = sys.modules[module_name]
+    except KeyError:
+        # Fix for manage.py shell_plus (Issue #366)
+        module = None
+
+    if module is not None:
+        module_name = module.__name__
+        # - If the task module is used as the __main__ script
+        # - we need to rewrite the module part of the task name
+        # - to match App.main.
+        if MP_MAIN_FILE and module.__file__ == MP_MAIN_FILE:
+            # - see comment about :envvar:`MP_MAIN_FILE` above.
+            module_name = '__main__'
+    if module_name == '__main__' and app.main:
+        return '.'.join([app.main, name])
+    return '.'.join(p for p in (module_name, name) if p)
+
+
+def nodename(name, hostname):
+    """Create node name from name/hostname pair."""
+    return NODENAME_SEP.join((name, hostname))
+
+
+def anon_nodename(hostname=None, prefix='gen'):
+    return nodename(''.join([prefix, str(os.getpid())]),
+                    hostname or socket.gethostname())
+
+
+def nodesplit(nodename):
+    """Split node name into tuple of name/hostname."""
+    parts = nodename.split(NODENAME_SEP, 1)
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts
+
+
+def default_nodename(hostname):
+    name, host = nodesplit(hostname or '')
+    return nodename(name or NODENAME_DEFAULT, host or socket.gethostname())
+
+
+def node_format(s, nodename, **extra):
+    name, host = nodesplit(nodename)
+    return host_format(
+        s, host, n=name or NODENAME_DEFAULT, **extra)
+
+
+def _fmt_process_index(prefix='', default='0'):
+    from .log import current_process_index
+    index = current_process_index()
+    return '{0}{1}'.format(prefix, index) if index else default
+_fmt_process_index_with_prefix = partial(_fmt_process_index, '-', '')
+
+
+def host_format(s, host=None, **extra):
+    host = host or socket.gethostname()
+    name, _, domain = host.partition('.')
+    keys = dict({
+        'h': host, 'n': name, 'd': domain,
+        'i': _fmt_process_index, 'I': _fmt_process_index_with_prefix,
+    }, **extra)
+    return simple_format(s, keys)
+
+
+def simple_format(s, keys, pattern=RE_FORMAT, expand=r'\1'):
+    if s:
+        keys.setdefault('%', '%')
+
+        def resolve(match):
+            resolver = keys[match.expand(expand)]
+            if isinstance(resolver, Callable):
+                return resolver()
+            return resolver
+
+        return pattern.sub(resolve, s)
+    return s
+
+
+# ------------------------------------------------------------------------ #
+# > XXX Compat
+from .log import LOG_LEVELS     # noqa
+from .imports import (          # noqa
+    qualname as get_full_cls_name, symbol_by_name as get_cls_by_name,
+    instantiate, import_from_cwd
+)
+from .functional import chunks, noop                    # noqa
+from kombu.utils import cached_property, kwdict, uuid   # noqa
+gen_unique_id = uuid

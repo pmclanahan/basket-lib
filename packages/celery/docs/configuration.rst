@@ -23,24 +23,16 @@ It should contain all you need to run a basic Celery set-up.
 
 .. code-block:: python
 
-    # List of modules to import when celery starts.
-    CELERY_IMPORTS = ("myapp.tasks", )
-
-    ## Result store settings.
-    CELERY_RESULT_BACKEND = "database"
-    CELERY_RESULT_DBURI = "sqlite:///mydatabase.db"
-
     ## Broker settings.
-    BROKER_URL = "amqp://guest:guest@localhost:5672//"
+    BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
-    ## Worker settings
-    ## If you're doing mostly I/O you can have more processes,
-    ## but if mostly spending CPU, try to keep it close to the
-    ## number of CPUs on your machine. If not set, the number of CPUs/cores
-    ## available will be used.
-    CELERYD_CONCURRENCY = 10
+    # List of modules to import when celery starts.
+    CELERY_IMPORTS = ('myapp.tasks', )
 
-    CELERY_ANNOTATIONS = {"tasks.add": {"rate_limit": "10/s"}}
+    ## Using the database to store task state and results.
+    CELERY_RESULT_BACKEND = 'db+sqlite:///results.db'
+
+    CELERY_ANNOTATIONS = {'tasks.add': {'rate_limit': '10/s'}}
 
 
 Configuration Directives
@@ -56,6 +48,8 @@ Time and date settings
 CELERY_ENABLE_UTC
 ~~~~~~~~~~~~~~~~~
 
+.. versionadded:: 2.5
+
 If enabled dates and times in messages will be converted to use
 the UTC timezone.
 
@@ -63,19 +57,24 @@ Note that workers running Celery versions below 2.5 will assume a local
 timezone for all messages, so only enable if all workers have been
 upgraded.
 
-Disabled by default.  UTC will be enabled by default in version 3.0.
+Enabled by default since version 3.0.
 
 .. setting:: CELERY_TIMEZONE
 
 CELERY_TIMEZONE
----------------
+~~~~~~~~~~~~~~~
 
 Configure Celery to use a custom time zone.
-The timezone value can be any time zone supported by the :mod:`pytz`
-library.  :mod:`pytz` must be installed for the selected zone
-to be used.
+The timezone value can be any time zone supported by the `pytz`_
+library.
 
-If not set then the systems default local time zone is used.
+If not set the UTC timezone is used.  For backwards compatibility
+there is also a :setting:`CELERY_ENABLE_UTC` setting, and this is set
+to false the system local timezone is used instead.
+
+.. _`pytz`: http://pypi.python.org/pypi/pytz/
+
+
 
 .. _conf-tasks:
 
@@ -98,13 +97,13 @@ task:
 
 .. code-block:: python
 
-    CELERY_ANNOTATIONS = {"tasks.add": {"rate_limit": "10/s"}}
+    CELERY_ANNOTATIONS = {'tasks.add': {'rate_limit': '10/s'}}
 
 or change the same for all tasks:
 
 .. code-block:: python
 
-    CELERY_ANNOTATIONS = {"*": {"rate_limit": "10/s"}}
+    CELERY_ANNOTATIONS = {'*': {'rate_limit': '10/s'}}
 
 
 You can change methods too, for example the ``on_failure`` handler:
@@ -112,9 +111,9 @@ You can change methods too, for example the ``on_failure`` handler:
 .. code-block:: python
 
     def my_on_failure(self, exc, task_id, args, kwargs, einfo):
-        print("Oh no! Task failed: %r" % (exc, ))
+        print('Oh no! Task failed: {0!r}'.format(exc))
 
-    CELERY_ANNOTATIONS = {"*": {"on_failure": my_on_failure}}
+    CELERY_ANNOTATIONS = {'*': {'on_failure': my_on_failure}}
 
 
 If you need more flexibility then you can use objects
@@ -125,10 +124,10 @@ instead of a dict to choose which tasks to annotate:
     class MyAnnotate(object):
 
         def annotate(self, task):
-            if task.name.startswith("tasks."):
-                return {"rate_limit": "10/s"}
+            if task.name.startswith('tasks.'):
+                return {'rate_limit': '10/s'}
 
-    CELERY_ANNOTATIONS = (MyAnnotate(), {...})
+    CELERY_ANNOTATIONS = (MyAnnotate(), {…})
 
 
 
@@ -142,8 +141,13 @@ Concurrency settings
 CELERYD_CONCURRENCY
 ~~~~~~~~~~~~~~~~~~~
 
-The number of concurrent worker processes/threads/green threads, executing
+The number of concurrent worker processes/threads/green threads executing
 tasks.
+
+If you're doing mostly I/O you can have more processes,
+but if mostly CPU-bound, try to keep it close to the
+number of CPUs on your machine. If not set, the number of CPUs/cores
+on the host will be used.
 
 Defaults to the number of available CPUs.
 
@@ -159,6 +163,10 @@ have very long running tasks waiting in the queue and you have to start the
 workers, note that the first worker to start will receive four times the
 number of messages initially.  Thus the tasks may not be fairly distributed
 to the workers.
+
+.. note::
+
+    Tasks with ETA/countdown are not affected by prefetch limits.
 
 .. _conf-result-backend:
 
@@ -191,10 +199,6 @@ Can be one of the following:
     Use `Redis`_ to store the results.
     See :ref:`conf-redis-result-backend`.
 
-* tyrant
-    Use `Tokyo Tyrant`_ to store the results.
-    See :ref:`conf-tyrant-result-backend`.
-
 * amqp
     Send results back as AMQP messages
     See :ref:`conf-amqp-result-backend`.
@@ -203,25 +207,35 @@ Can be one of the following:
     Use `Cassandra`_ to store the results.
     See :ref:`conf-cassandra-result-backend`.
 
+* ironcache
+    Use `IronCache`_ to store the results.
+    See :ref:`conf-ironcache-result-backend`.
+
+* couchbase
+    Use `Couchbase`_ to store the results.
+    See :ref:`conf-couchbase-result-backend`.
+
 .. warning:
 
     While the AMQP result backend is very efficient, you must make sure
-    you only receive the same result once.  See :doc:`userguide/executing`).
+    you only receive the same result once.  See :doc:`userguide/calling`).
 
 .. _`SQLAlchemy`: http://sqlalchemy.org
 .. _`memcached`: http://memcached.org
 .. _`MongoDB`: http://mongodb.org
-.. _`Redis`: http://code.google.com/p/redis/
-.. _`Tokyo Tyrant`: http://1978th.net/tokyotyrant/
+.. _`Redis`: http://redis.io
 .. _`Cassandra`: http://cassandra.apache.org/
+.. _`IronCache`: http://www.iron.io/cache
+.. _`Couchbase`: http://www.couchbase.com/
+
 
 .. setting:: CELERY_RESULT_SERIALIZER
 
 CELERY_RESULT_SERIALIZER
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-Result serialization format.  Default is `"pickle"`. See
-:ref:`executing-serializers` for information about supported
+Result serialization format.  Default is ``pickle``. See
+:ref:`calling-serializers` for information about supported
 serialization formats.
 
 .. _conf-database-result-backend:
@@ -229,31 +243,50 @@ serialization formats.
 Database backend settings
 -------------------------
 
+Database URL Examples
+~~~~~~~~~~~~~~~~~~~~~
+
+To use the database backend you have to configure the
+:setting:`CELERY_RESULT_BACKEND` setting with a connection URL and the ``db+``
+prefix:
+
+.. code-block:: python
+
+    CELERY_RESULT_BACKEND = 'db+scheme://user:password@host:port/dbname'
+
+Examples:
+
+    # sqlite (filename)
+    CELERY_RESULT_BACKEND = 'db+sqlite:///results.sqlite'
+
+    # mysql
+    CELERY_RESULT_BACKEND = 'db+mysql://scott:tiger@localhost/foo'
+
+    # postgresql
+    CELERY_RESULT_BACKEND = 'db+postgresql://scott:tiger@localhost/mydatabase'
+
+    # oracle
+    CELERY_RESULT_BACKEND = 'db+oracle://scott:tiger@127.0.0.1:1521/sidname'
+
+.. code-block:: python
+
+Please see `Supported Databases`_ for a table of supported databases,
+and `Connection String`_ for more information about connection
+strings (which is the part of the URI that comes after the ``db+`` prefix).
+
+.. _`Supported Databases`:
+    http://www.sqlalchemy.org/docs/core/engines.html#supported-databases
+
+.. _`Connection String`:
+    http://www.sqlalchemy.org/docs/core/engines.html#database-urls
+
 .. setting:: CELERY_RESULT_DBURI
 
 CELERY_RESULT_DBURI
 ~~~~~~~~~~~~~~~~~~~
 
-Please see `Supported Databases`_ for a table of supported databases.
-To use this backend you need to configure it with an
-`Connection String`_, some examples include:
-
-.. code-block:: python
-
-    # sqlite (filename)
-    CELERY_RESULT_DBURI = "sqlite:///celerydb.sqlite"
-
-    # mysql
-    CELERY_RESULT_DBURI = "mysql://scott:tiger@localhost/foo"
-
-    # postgresql
-    CELERY_RESULT_DBURI = "postgresql://scott:tiger@localhost/mydatabase"
-
-    # oracle
-    CELERY_RESULT_DBURI = "oracle://scott:tiger@127.0.0.1:1521/sidname"
-
-See `Connection String`_ for more information about connection
-strings.
+This setting is no longer used as it's now possible to specify
+the database URL directly in the :setting:`CELERY_RESULT_BACKEND` setting.
 
 .. setting:: CELERY_RESULT_ENGINE_OPTIONS
 
@@ -264,7 +297,7 @@ To specify additional SQLAlchemy database engine options you can use
 the :setting:`CELERY_RESULT_ENGINE_OPTIONS` setting::
 
     # echo enables verbose logging from SQLAlchemy.
-    CELERY_RESULT_ENGINE_OPTIONS = {"echo": True}
+    CELERY_RESULT_ENGINE_OPTIONS = {'echo': True}
 
 
 .. setting:: CELERY_RESULT_DB_SHORT_LIVED_SESSIONS
@@ -277,19 +310,22 @@ going stale through inactivity.  For example, intermittent errors like
 `(OperationalError) (2006, 'MySQL server has gone away')` can be fixed by enabling
 short lived sessions.  This option only affects the database backend.
 
-.. _`Supported Databases`:
-    http://www.sqlalchemy.org/docs/core/engines.html#supported-databases
+Specifying Table Names
+~~~~~~~~~~~~~~~~~~~~~~
 
-.. _`Connection String`:
-    http://www.sqlalchemy.org/docs/core/engines.html#database-urls
+.. setting:: CELERY_RESULT_DB_TABLENAMES
 
-Example configuration
-~~~~~~~~~~~~~~~~~~~~~
+When SQLAlchemy is configured as the result backend, Celery automatically
+creates two tables to store result metadata for tasks.  This setting allows
+you to customize the table names:
 
 .. code-block:: python
 
-    CELERY_RESULT_BACKEND = "database"
-    CELERY_RESULT_DBURI = "mysql://user:password@host/dbname"
+    # use custom table names for the database result backend.
+    CELERY_RESULT_DB_TABLENAMES = {
+        'task': 'myapp_taskmeta',
+        'group': 'myapp_groupmeta',
+    }
 
 .. _conf-amqp-result-backend:
 
@@ -309,7 +345,7 @@ AMQP backend settings
 CELERY_RESULT_EXCHANGE
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Name of the exchange to publish results in.  Default is `"celeryresults"`.
+Name of the exchange to publish results in.  Default is `celeryresults`.
 
 .. setting:: CELERY_RESULT_EXCHANGE_TYPE
 
@@ -333,7 +369,7 @@ Example configuration
 
 .. code-block:: python
 
-    CELERY_RESULT_BACKEND = "amqp"
+    CELERY_RESULT_BACKEND = 'amqp'
     CELERY_TASK_RESULT_EXPIRES = 18000  # 5 hours.
 
 .. _conf-cache-result-backend:
@@ -346,30 +382,25 @@ Cache backend settings
     The cache backend supports the `pylibmc`_ and `python-memcached`
     libraries.  The latter is used only if `pylibmc`_ is not installed.
 
-.. setting:: CELERY_CACHE_BACKEND
-
-CELERY_CACHE_BACKEND
-~~~~~~~~~~~~~~~~~~~~
-
 Using a single memcached server:
 
 .. code-block:: python
 
-    CELERY_CACHE_BACKEND = 'memcached://127.0.0.1:11211/'
+    CELERY_RESULT_BACKEND = 'cache+memcached://127.0.0.1:11211/'
 
 Using multiple memcached servers:
 
 .. code-block:: python
 
-    CELERY_RESULT_BACKEND = "cache"
-    CELERY_CACHE_BACKEND = 'memcached://172.19.26.240:11211;172.19.26.242:11211/'
+    CELERY_RESULT_BACKEND = """
+        cache+memcached://172.19.26.240:11211;172.19.26.242:11211/
+    """.strip()
 
 .. setting:: CELERY_CACHE_BACKEND_OPTIONS
 
+The "memory" backend stores the cache in memory only:
 
-The "dummy" backend stores the cache in memory only:
-
-    CELERY_CACHE_BACKEND = "dummy"
+    CELERY_CACHE_BACKEND = 'memory'
 
 CELERY_CACHE_BACKEND_OPTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -379,88 +410,67 @@ setting:
 
 .. code-block:: python
 
-    CELERY_CACHE_BACKEND_OPTIONS = {"binary": True,
-                                    "behaviors": {"tcp_nodelay": True}}
+    CELERY_CACHE_BACKEND_OPTIONS = {'binary': True,
+                                    'behaviors': {'tcp_nodelay': True}}
 
 .. _`pylibmc`: http://sendapatch.se/projects/pylibmc/
 
-.. _conf-tyrant-result-backend:
+.. setting:: CELERY_CACHE_BACKEND
 
-Tokyo Tyrant backend settings
------------------------------
+CELERY_CACHE_BACKEND
+~~~~~~~~~~~~~~~~~~~~
 
-.. note::
-
-    The Tokyo Tyrant backend requires the :mod:`pytyrant` library:
-    http://pypi.python.org/pypi/pytyrant/
-
-This backend requires the following configuration directives to be set:
-
-.. setting:: TT_HOST
-
-TT_HOST
-~~~~~~~
-
-Host name of the Tokyo Tyrant server.
-
-.. setting:: TT_PORT
-
-TT_PORT
-~~~~~~~
-
-The port the Tokyo Tyrant server is listening to.
-
-
-Example configuration
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    CELERY_RESULT_BACKEND = "tyrant"
-    TT_HOST = "localhost"
-    TT_PORT = 1978
+This setting is no longer used as it's now possible to specify
+the cache backend directly in the :setting:`CELERY_RESULT_BACKEND` setting.
 
 .. _conf-redis-result-backend:
 
 Redis backend settings
 ----------------------
 
+Configuring the backend URL
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .. note::
 
     The Redis backend requires the :mod:`redis` library:
     http://pypi.python.org/pypi/redis/
 
-    To install the redis package use `pip` or `easy_install`::
+    To install the redis package use `pip` or `easy_install`:
+
+    .. code-block:: bash
 
         $ pip install redis
 
-This backend requires the following configuration directives to be set.
+This backend requires the :setting:`CELERY_RESULT_BACKEND`
+setting to be set to a Redis URL::
 
-.. setting:: CELERY_REDIS_HOST
+    CELERY_RESULT_BACKEND = 'redis://:password@host:port/db'
 
-CELERY_REDIS_HOST
-~~~~~~~~~~~~~~~~~
+For example::
 
-Host name of the Redis database server. e.g. `"localhost"`.
+    CELERY_RESULT_BACKEND = 'redis://localhost/0'
 
-.. setting:: CELERY_REDIS_PORT
+which is the same as::
 
-CELERY_REDIS_PORT
-~~~~~~~~~~~~~~~~~
+    CELERY_RESULT_BACKEND = 'redis://'
 
-Port to the Redis database server. e.g. `6379`.
+The fields of the URL is defined as folows:
 
-.. setting:: CELERY_REDIS_DB
+- *host*
 
-CELERY_REDIS_DB
-~~~~~~~~~~~~~~~
+Host name or IP address of the Redis server. e.g. `localhost`.
 
-Database number to use. Default is 0
+- *port*
 
-.. setting:: CELERY_REDIS_PASSWORD
+Port to the Redis server. Default is 6379.
 
-CELERY_REDIS_PASSWORD
-~~~~~~~~~~~~~~~~~~~~~
+- *db*
+
+Database number to use. Default is 0.
+The db can include an optional leading slash.
+
+- *password*
 
 Password used to connect to the database.
 
@@ -471,16 +481,6 @@ CELERY_REDIS_MAX_CONNECTIONS
 
 Maximum number of connections available in the Redis connection
 pool used for sending and retrieving results.
-
-Example configuration
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    CELERY_RESULT_BACKEND = "redis"
-    CELERY_REDIS_HOST = "localhost"
-    CELERY_REDIS_PORT = 6379
-    CELERY_REDIS_DB = 0
 
 .. _conf-mongodb-result-backend:
 
@@ -499,24 +499,25 @@ CELERY_MONGODB_BACKEND_SETTINGS
 
 This is a dict supporting the following keys:
 
-* host
-    Host name of the MongoDB server. Defaults to "localhost".
-
-* port
-    The port the MongoDB server is listening to. Defaults to 27017.
-
-* user
-    User name to authenticate to the MongoDB server as (optional).
-
-* password
-    Password to authenticate to the MongoDB server (optional).
-
 * database
-    The database name to connect to. Defaults to "celery".
+    The database name to connect to. Defaults to ``celery``.
 
 * taskmeta_collection
     The collection name to store task meta data.
-    Defaults to "celery_taskmeta".
+    Defaults to ``celery_taskmeta``.
+
+* max_pool_size
+    Passed as max_pool_size to PyMongo's Connection or MongoClient
+    constructor. It is the maximum number of TCP connections to keep
+    open to MongoDB at a given time. If there are more open connections
+    than max_pool_size, sockets will be closed when they are released.
+    Defaults to 10.
+
+* options
+
+    Additional keyword arguments to pass to the mongodb connection
+    constructor.  See the :mod:`pymongo` docs to see a list of arguments
+    supported.
 
 .. _example-mongodb-result-config:
 
@@ -525,12 +526,10 @@ Example configuration
 
 .. code-block:: python
 
-    CELERY_RESULT_BACKEND = "mongodb"
+    CELERY_RESULT_BACKEND = 'mongodb://192.168.1.100:30000/'
     CELERY_MONGODB_BACKEND_SETTINGS = {
-        "host": "192.168.1.100",
-        "port": 30000,
-        "database": "mydb",
-        "taskmeta_collection": "my_taskmeta_collection",
+        'database': 'mydb',
+        'taskmeta_collection': 'my_taskmeta_collection',
     }
 
 .. _conf-cassandra-result-backend:
@@ -543,7 +542,9 @@ Cassandra backend settings
     The Cassandra backend requires the :mod:`pycassa` library:
     http://pypi.python.org/pypi/pycassa/
 
-    To install the pycassa package use `pip` or `easy_install`::
+    To install the pycassa package use `pip` or `easy_install`:
+
+    .. code-block:: bash
 
         $ pip install pycassa
 
@@ -554,35 +555,41 @@ This backend requires the following configuration directives to be set.
 CASSANDRA_SERVERS
 ~~~~~~~~~~~~~~~~~
 
-List of ``host:port`` Cassandra servers. e.g. ``["localhost:9160]"``.
+List of ``host:port`` Cassandra servers. e.g.::
+
+    CASSANDRA_SERVERS = ['localhost:9160']
 
 .. setting:: CASSANDRA_KEYSPACE
 
 CASSANDRA_KEYSPACE
 ~~~~~~~~~~~~~~~~~~
 
-The keyspace in which to store the results. e.g. ``"tasks_keyspace"``.
+The keyspace in which to store the results. e.g.::
+
+    CASSANDRA_KEYSPACE = 'tasks_keyspace'
 
 .. setting:: CASSANDRA_COLUMN_FAMILY
 
 CASSANDRA_COLUMN_FAMILY
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The column family in which to store the results. eg ``"tasks"``
+The column family in which to store the results. e.g.::
+
+    CASSANDRA_COLUMN_FAMILY = 'tasks'
 
 .. setting:: CASSANDRA_READ_CONSISTENCY
 
 CASSANDRA_READ_CONSISTENCY
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The read consistency used. Values can be ``"ONE"``, ``"QUORUM"`` or ``"ALL"``.
+The read consistency used. Values can be ``ONE``, ``QUORUM`` or ``ALL``.
 
 .. setting:: CASSANDRA_WRITE_CONSISTENCY
 
 CASSANDRA_WRITE_CONSISTENCY
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The write consistency used. Values can be ``"ONE"``, ``"QUORUM"`` or ``"ALL"``.
+The write consistency used. Values can be ``ONE``, ``QUORUM`` or ``ALL``.
 
 .. setting:: CASSANDRA_DETAILED_MODE
 
@@ -598,17 +605,102 @@ use the ``TimeUUID`` type as a comparator::
 
     create column family task_results with comparator = TimeUUIDType;
 
+CASSANDRA_OPTIONS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Options to be passed to the `pycassa connection pool`_ (optional).
+
+.. _`pycassa connection pool`: http://pycassa.github.com/pycassa/api/pycassa/pool.html
+
 Example configuration
 ~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-    CASSANDRA_SERVERS = ["localhost:9160"]
-    CASSANDRA_KEYSPACE = "celery"
-    CASSANDRA_COLUMN_FAMILY = "task_results"
-    CASSANDRA_READ_CONSISTENCY = "ONE"
-    CASSANDRA_WRITE_CONSISTENCY = "ONE"
+    CASSANDRA_SERVERS = ['localhost:9160']
+    CASSANDRA_KEYSPACE = 'celery'
+    CASSANDRA_COLUMN_FAMILY = 'task_results'
+    CASSANDRA_READ_CONSISTENCY = 'ONE'
+    CASSANDRA_WRITE_CONSISTENCY = 'ONE'
     CASSANDRA_DETAILED_MODE = True
+    CASSANDRA_OPTIONS = {
+        'timeout': 300,
+        'max_retries': 10
+    }
+
+
+.. _conf-ironcache-result-backend:
+
+IronCache backend settings
+--------------------------
+
+.. note::
+
+    The IronCache backend requires the :mod:`iron_celery` library:
+    http://pypi.python.org/pypi/iron_celery
+
+    To install the iron_celery package use `pip` or `easy_install`:
+
+    .. code-block:: bash
+
+        $ pip install iron_celery
+
+IronCache is configured via the URL provided in :setting:`CELERY_RESULT_BACKEND`, for example::
+
+    CELERY_RESULT_BACKEND = 'ironcache://project_id:token@'
+
+Or to change the cache name::
+
+    ironcache:://project_id:token@/awesomecache
+
+For more information, see: https://github.com/iron-io/iron_celery
+
+
+.. _conf-couchbase-result-backend:
+
+Couchbase backend settings
+--------------------------
+
+.. note::
+
+    The Couchbase backend requires the :mod:`couchbase` library:
+    https://pypi.python.org/pypi/couchbase
+
+    To install the couchbase package use `pip` or `easy_install`:
+
+    .. code-block:: bash
+
+        $ pip install couchbase
+
+This backend can be configured via the :setting:`CELERY_RESULT_BACKEND`
+set to a couchbase URL::
+
+    CELERY_RESULT_BACKEND = 'couchbase://username:password@host:port/bucket'
+
+
+.. setting:: CELERY_COUCHBASE_BACKEND_SETTINGS
+
+CELERY_COUCHBASE_BACKEND_SETTINGS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is a dict supporting the following keys:
+
+* host
+    Host name of the Couchbase server. Defaults to ``localhost``.
+
+* port
+    The port the Couchbase server is listening to. Defaults to ``8091``.
+
+* bucket
+    The default bucket the Couchbase server is writing to.
+    Defaults to ``default``.
+
+* username
+    User name to authenticate to the Couchbase server as (optional).
+
+* password
+    Password to authenticate to the Couchbase server (optional).
+
 
 .. _conf-messaging:
 
@@ -622,13 +714,20 @@ Message Routing
 CELERY_QUEUES
 ~~~~~~~~~~~~~
 
-The mapping of queues the worker consumes from.  This is a dictionary
-of queue name/options.  See :ref:`guide-routing` for more information.
+Most users will not want to specify this setting and should rather use
+the :ref:`automatic routing facilities <routing-automatic>`.
 
-The default is a queue/exchange/binding key of `"celery"`, with
-exchange type `direct`.
+If you really want to configure advanced routing, this setting should
+be a list of :class:`kombu.Queue` objects the worker will consume from.
 
-You don't have to care about this unless you want custom routing facilities.
+Note that workers can be overriden this setting via the `-Q` option,
+or individual queues from this list (by name) can be excluded using
+the `-X` option.
+
+Also see :ref:`routing-basics` for more information.
+
+The default is a queue/exchange/binding key of ``celery``, with
+exchange type ``direct``.
 
 .. setting:: CELERY_ROUTES
 
@@ -639,12 +738,61 @@ A list of routers, or a single router used to route tasks to queues.
 When deciding the final destination of a task the routers are consulted
 in order.  See :ref:`routers` for more information.
 
+.. setting:: CELERY_QUEUE_HA_POLICY
+
+CELERY_QUEUE_HA_POLICY
+~~~~~~~~~~~~~~~~~~~~~~
+:brokers: RabbitMQ
+
+This will set the default HA policy for a queue, and the value
+can either be a string (usually ``all``):
+
+.. code-block:: python
+
+    CELERY_QUEUE_HA_POLICY = 'all'
+
+Using 'all' will replicate the queue to all current nodes,
+Or you can give it a list of nodes to replicate to:
+
+.. code-block:: python
+
+    CELERY_QUEUE_HA_POLICY = ['rabbit@host1', 'rabbit@host2']
+
+
+Using a list will implicitly set ``x-ha-policy`` to 'nodes' and
+``x-ha-policy-params`` to the given list of nodes.
+
+See http://www.rabbitmq.com/ha.html for more information.
+
+.. setting:: CELERY_WORKER_DIRECT
+
+CELERY_WORKER_DIRECT
+~~~~~~~~~~~~~~~~~~~~
+
+This option enables so that every worker has a dedicated queue,
+so that tasks can be routed to specific workers.
+
+The queue name for each worker is automatically generated based on
+the worker hostname and a ``.dq`` suffix, using the ``C.dq`` exchange.
+
+For example the queue name for the worker with node name ``w1@example.com``
+becomes::
+
+    w1@example.com.dq
+
+Then you can route the task to the task by specifying the hostname
+as the routing key and the ``C.dq`` exchange::
+
+    CELERY_ROUTES = {
+        'tasks.add': {'exchange': 'C.dq', 'routing_key': 'w1@example.com'}
+    }
+
 .. setting:: CELERY_CREATE_MISSING_QUEUES
 
 CELERY_CREATE_MISSING_QUEUES
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If enabled (default), any queues specified that is not defined in
+If enabled (default), any queues specified that are not defined in
 :setting:`CELERY_QUEUES` will be automatically created. See
 :ref:`routing-automatic`.
 
@@ -653,8 +801,16 @@ If enabled (default), any queues specified that is not defined in
 CELERY_DEFAULT_QUEUE
 ~~~~~~~~~~~~~~~~~~~~
 
-The queue used by default, if no custom queue is specified.  This queue must
-be listed in :setting:`CELERY_QUEUES`.  The default is: `celery`.
+The name of the default queue used by `.apply_async` if the message has
+no route or no custom queue has been specified.
+
+
+This queue must be listed in :setting:`CELERY_QUEUES`.
+If :setting:`CELERY_QUEUES` is not specified then it is automatically
+created containing one queue entry, where this name is used as the name of
+that queue.
+
+The default is: `celery`.
 
 .. seealso::
 
@@ -666,14 +822,17 @@ CELERY_DEFAULT_EXCHANGE
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Name of the default exchange to use when no custom exchange is
-specified.  The default is: `celery`.
+specified for a key in the :setting:`CELERY_QUEUES` setting.
+
+The default is: `celery`.
 
 .. setting:: CELERY_DEFAULT_EXCHANGE_TYPE
 
 CELERY_DEFAULT_EXCHANGE_TYPE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Default exchange type used when no custom exchange is specified.
+Default exchange type used when no custom exchange type is specified
+for a key in the :setting:`CELERY_QUEUES` setting.
 The default is: `direct`.
 
 .. setting:: CELERY_DEFAULT_ROUTING_KEY
@@ -681,7 +840,9 @@ The default is: `direct`.
 CELERY_DEFAULT_ROUTING_KEY
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The default routing key used when sending tasks.
+The default routing key used when no custom routing key
+is specified for a key in the :setting:`CELERY_QUEUES` setting.
+
 The default is: `celery`.
 
 .. setting:: CELERY_DEFAULT_DELIVERY_MODE
@@ -697,18 +858,55 @@ persistent messages.
 Broker Settings
 ---------------
 
+.. setting:: CELERY_ACCEPT_CONTENT
+
+CELERY_ACCEPT_CONTENT
+~~~~~~~~~~~~~~~~~~~~~
+
+A whitelist of content-types/serializers to allow.
+
+If a message is received that is not in this list then
+the message will be discarded with an error.
+
+By default any content type is enabled (including pickle and yaml)
+so make sure untrusted parties do not have access to your broker.
+See :ref:`guide-security` for more.
+
+Example::
+
+    # using serializer name
+    CELERY_ACCEPT_CONTENT = ['json']
+
+    # or the actual content-type (MIME)
+    CELERY_ACCEPT_CONTENT = ['application/json']
+
+.. setting:: BROKER_FAILOVER_STRATEGY
+
+BROKER_FAILOVER_STRATEGY
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Default failover strategy for the broker Connection object. If supplied,
+may map to a key in 'kombu.connection.failover_strategies', or be a reference
+to any method that yields a single item from a supplied list.
+
+Example::
+
+    # Random failover strategy
+    def random_failover_strategy(servers):
+        it = list(it)  # don't modify callers list
+        shuffle = random.shuffle
+        for _ in repeat(None):
+            shuffle(it)
+            yield it[0]
+
+    BROKER_FAILOVER_STRATEGY=random_failover_strategy
+
 .. setting:: BROKER_TRANSPORT
 
 BROKER_TRANSPORT
 ~~~~~~~~~~~~~~~~
 :Aliases: ``BROKER_BACKEND``
 :Deprecated aliases: ``CARROT_BACKEND``
-
-The Kombu transport to use.  Default is ``amqplib``.
-
-You can use a custom transport class name, or select one of the
-built-in transports: ``amqplib``, ``pika``, ``redis``, ``beanstalk``,
-``sqlalchemy``, ``django``, ``mongodb``, ``couchdb``.
 
 .. setting:: BROKER_URL
 
@@ -722,48 +920,46 @@ Default broker URL.  This must be an URL in the form of::
 Only the scheme part (``transport://``) is required, the rest
 is optional, and defaults to the specific transports default values.
 
-If this setting is defined it will override a subset of the
-other ``BROKER`` options. These options are :setting:`BROKER_HOST`,
-:setting:`BROKER_USER`, :setting:`BROKER_PASSWORD`, :setting:`BROKER_PORT`,
-and :setting:`BROKER_VHOST`.
+The transport part is the broker implementation to use, and the
+default is ``amqp``, which uses ``librabbitmq`` by default or falls back to
+``pyamqp`` if that is not installed.  Also there are many other choices including
+``redis``, ``beanstalk``, ``sqlalchemy``, ``django``, ``mongodb``,
+``couchdb``.
+It can also be a fully qualified path to your own transport implementation.
 
-See the Kombu documentation for more information about broker URLs.
+See :ref:`kombu:connection-urls` in the Kombu documentation for more
+information.
 
-.. setting:: BROKER_HOST
+.. setting:: BROKER_HEARTBEAT
 
-BROKER_HOST
-~~~~~~~~~~~
+BROKER_HEARTBEAT
+~~~~~~~~~~~~~~~~
+:transports supported: ``pyamqp``
 
-Hostname of the broker.
+It's not always possible to detect connection loss in a timely
+manner using TCP/IP alone, so AMQP defines something called heartbeats
+that's is used both by the client and the broker to detect if
+a connection was closed.
 
-.. setting:: BROKER_PORT
+Hartbeats are disabled by default.
 
-BROKER_PORT
-~~~~~~~~~~~
+If the heartbeat value is 10 seconds, then
+the heartbeat will be monitored at the interval specified
+by the :setting:`BROKER_HEARTBEAT_CHECKRATE` setting, which by default is
+double the rate of the heartbeat value
+(so for the default 10 seconds, the heartbeat is checked every 5 seconds).
 
-Custom port of the broker.  Default is to use the default port for the
-selected backend.
+.. setting:: BROKER_HEARTBEAT_CHECKRATE
 
-.. setting:: BROKER_USER
+BROKER_HEARTBEAT_CHECKRATE
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+:transports supported: ``pyamqp``
 
-BROKER_USER
-~~~~~~~~~~~
-
-Username to connect as.
-
-.. setting:: BROKER_PASSWORD
-
-BROKER_PASSWORD
-~~~~~~~~~~~~~~~
-
-Password to connect with.
-
-.. setting:: BROKER_VHOST
-
-BROKER_VHOST
-~~~~~~~~~~~~
-
-Virtual host.  Default is `"/"`.
+At intervals the worker will monitor that the broker has not missed
+too many heartbeats.  The rate at which this is checked is calculated
+by dividing the :setting:`BROKER_HEARTBEAT` value with this value,
+so if the heartbeat is 10.0 and the rate is the default 2.0, the check
+will be performed every 5 seconds (twice the heartbeat sending rate).
 
 .. setting:: BROKER_USE_SSL
 
@@ -826,6 +1022,13 @@ If this is set to :const:`0` or :const:`None`, we will retry forever.
 
 Default is 100 retries.
 
+.. setting:: BROKER_LOGIN_METHOD
+
+BROKER_LOGIN_METHOD
+~~~~~~~~~~~~~~~~~~~
+
+Set custom amqp login method, default is ``AMQPLAIN``.
+
 .. setting:: BROKER_TRANSPORT_OPTIONS
 
 BROKER_TRANSPORT_OPTIONS
@@ -836,6 +1039,13 @@ BROKER_TRANSPORT_OPTIONS
 A dict of additional options passed to the underlying transport.
 
 See your transport user manual for supported options (if any).
+
+Example setting the visibility timeout (supported by Redis and SQS
+transports):
+
+.. code-block:: python
+
+    BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': 18000}  # 5 hours
 
 .. _conf-task-execution:
 
@@ -882,7 +1092,7 @@ CELERY_MESSAGE_COMPRESSION
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Default compression used for task messages.
-Can be ``"gzip"``, ``"bzip2"`` (if available), or any custom
+Can be ``gzip``, ``bzip2`` (if available), or any custom
 compression schemes registered in the Kombu compression registry.
 
 The default is to send uncompressed messages.
@@ -898,12 +1108,17 @@ stored task tombstones will be deleted.
 A built-in periodic task will delete the results after this time
 (:class:`celery.task.backend_cleanup`).
 
+A value of :const:`None` or 0 means results will never expire (depending
+on backend specifications).
+
+Default is to expire after 1 day.
+
 .. note::
 
     For the moment this only works with the amqp, database, cache, redis and MongoDB
     backends.
 
-    When using the database or MongoDB backends, `celerybeat` must be
+    When using the database or MongoDB backends, `celery beat` must be
     running for the results to be expired.
 
 .. setting:: CELERY_MAX_CACHED_RESULTS
@@ -914,7 +1129,29 @@ CELERY_MAX_CACHED_RESULTS
 Result backends caches ready results used by the client.
 
 This is the total number of results to cache before older results are evicted.
-The default is 5000.
+The default is 5000.  0 or None means no limit, and a value of :const:`-1`
+will disable the cache.
+
+.. setting:: CELERY_CHORD_PROPAGATES
+
+CELERY_CHORD_PROPAGATES
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 3.0.14
+
+This setting defines what happens when a task part of a chord raises an
+exception:
+
+- If propagate is True the chord callback will change state to FAILURE
+  with the exception value set to a :exc:`~@ChordError`
+  instance containing information about the error and the task that failed.
+
+    This is the default behavior in Celery 3.1+
+
+- If propagate is False the exception value will instead be forwarded
+  to the chord callback.
+
+    This was the default behavior before version 3.1.
 
 .. setting:: CELERY_TRACK_STARTED
 
@@ -939,7 +1176,7 @@ methods that have been registered with :mod:`kombu.serialization.registry`.
 
 .. seealso::
 
-    :ref:`executing-serializers`.
+    :ref:`calling-serializers`.
 
 .. setting:: CELERY_TASK_PUBLISH_RETRY
 
@@ -952,7 +1189,7 @@ Decides if publishing task messages will be retried in the case
 of connection loss or other connection errors.
 See also :setting:`CELERY_TASK_PUBLISH_RETRY_POLICY`.
 
-Disabled by default.
+Enabled by default.
 
 .. setting:: CELERY_TASK_PUBLISH_RETRY_POLICY
 
@@ -964,45 +1201,7 @@ CELERY_TASK_PUBLISH_RETRY_POLICY
 Defines the default policy when retrying publishing a task message in
 the case of connection loss or other connection errors.
 
-This is a mapping that must contain the following keys:
-
-    * `max_retries`
-
-        Maximum number of retries before giving up, in this case the
-        exception that caused the retry to fail will be raised.
-
-        A value of 0 or :const:`None` means it will retry forever.
-
-        The default is to retry 3 times.
-
-    * `interval_start`
-
-        Defines the number of seconds (float or integer) to wait between
-        retries.  Default is 0, which means the first retry will be
-        instantaneous.
-
-    * `interval_step`
-
-        On each consecutive retry this number will be added to the retry
-        delay (float or integer).  Default is 0.2.
-
-    * `interval_max`
-
-        Maximum number of seconds (float or integer) to wait between
-        retries.  Default is 0.2.
-
-With the default policy of::
-
-    {"max_retries": 3,
-     "interval_start": 0,
-     "interval_step": 0.2,
-     "interval_max": 0.2}
-
-the maximum time spent retrying will be 0.4 seconds.  It is set relatively
-short by default because a connection failure could lead to a retry pile effect
-if the broker connection is down: e.g. many web server processes waiting
-to retry blocking other incoming requests.
-
+See :ref:`calling-retry` for more information.
 
 .. setting:: CELERY_DEFAULT_RATE_LIMIT
 
@@ -1033,27 +1232,40 @@ has been executed, not *just before*, which is the default behavior.
 
     FAQ: :ref:`faq-acks_late-vs-retry`.
 
-.. _conf-celeryd:
+.. _conf-worker:
 
-Worker: celeryd
----------------
+Worker
+------
 
 .. setting:: CELERY_IMPORTS
 
 CELERY_IMPORTS
 ~~~~~~~~~~~~~~
 
-A sequence of modules to import when the celery daemon starts.
+A sequence of modules to import when the worker starts.
 
 This is used to specify the task modules to import, but also
 to import signal handlers and additional remote control commands, etc.
+
+The modules will be imported in the original order.
+
+.. setting:: CELERY_INCLUDE
+
+CELERY_INCLUDE
+~~~~~~~~~~~~~~
+
+Exact same semantics as :setting:`CELERY_IMPORTS`, but can be used as a means
+to have different import categories.
+
+The modules in this setting are imported after the modules in
+:setting:`CELERY_IMPORTS`.
 
 .. setting:: CELERYD_FORCE_EXECV
 
 CELERYD_FORCE_EXECV
 ~~~~~~~~~~~~~~~~~~~
 
-On Unix the processes pool will fork, so that child processes
+On Unix the prefork pool will fork, so that child processes
 start with the same memory as the parent process.
 
 This can cause problems as there is a known deadlock condition
@@ -1065,6 +1277,18 @@ especially in combination with time limits or having a max tasks per child limit
 This option will be enabled by default in a later version.
 
 This is not a problem on Windows, as it does not have `fork()`.
+
+.. setting:: CELERYD_WORKER_LOST_WAIT
+
+CELERYD_WORKER_LOST_WAIT
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+In some cases a worker may be killed without proper cleanup,
+and the worker may have published a result before terminating.
+This value specifies how long we wait for any missing results before
+raising a :exc:`@WorkerLostError` exception.
+
+Default is 10.0
 
 .. setting:: CELERYD_MAX_TASKS_PER_CHILD
 
@@ -1089,7 +1313,7 @@ CELERYD_TASK_SOFT_TIME_LIMIT
 
 Task soft time limit in seconds.
 
-The :exc:`~celery.exceptions.SoftTimeLimitExceeded` exception will be
+The :exc:`~@SoftTimeLimitExceeded` exception will be
 raised when this is exceeded.  The task can catch this to
 e.g. clean up before the hard time limit comes.
 
@@ -1097,10 +1321,9 @@ Example:
 
 .. code-block:: python
 
-    from celery.task import task
     from celery.exceptions import SoftTimeLimitExceeded
 
-    @task()
+    @app.task
     def mytask():
         try:
             return do_work()
@@ -1125,20 +1348,30 @@ Can be a relative or absolute path, but be aware that the suffix `.db`
 may be appended to the file name (depending on Python version).
 
 Can also be set via the :option:`--statedb` argument to
-:mod:`~celery.bin.celeryd`.
+:mod:`~celery.bin.worker`.
 
 Not enabled by default.
 
-.. setting:: CELERYD_ETA_SCHEDULER_PRECISION
+.. setting:: CELERYD_TIMER_PRECISION
 
-CELERYD_ETA_SCHEDULER_PRECISION
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CELERYD_TIMER_PRECISION
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Set the maximum time in seconds that the ETA scheduler can sleep between
 rechecking the schedule.  Default is 1 second.
 
 Setting this value to 1 second means the schedulers precision will
 be 1 second. If you need near millisecond precision you can set this to 0.1.
+
+.. setting:: CELERY_ENABLE_REMOTE_CONTROL
+
+CELERY_ENABLE_REMOTE_CONTROL
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Specify if remote control of the workers is enabled.
+
+Default is :const:`True`.
+
 
 .. _conf-error-mails:
 
@@ -1177,7 +1410,7 @@ Default is celery@localhost.
 EMAIL_HOST
 ~~~~~~~~~~
 
-The mail server to use.  Default is `"localhost"`.
+The mail server to use.  Default is ``localhost``.
 
 .. setting:: EMAIL_HOST_USER
 
@@ -1240,18 +1473,18 @@ george@vandelay.com and kramer@vandelay.com:
 
     # Name and email addresses of recipients
     ADMINS = (
-        ("George Costanza", "george@vandelay.com"),
-        ("Cosmo Kramer", "kosmo@vandelay.com"),
+        ('George Costanza', 'george@vandelay.com'),
+        ('Cosmo Kramer', 'kosmo@vandelay.com'),
     )
 
     # Email address used as sender (From field).
-    SERVER_EMAIL = "no-reply@vandelay.com"
+    SERVER_EMAIL = 'no-reply@vandelay.com'
 
     # Mailserver configuration
-    EMAIL_HOST = "mail.vandelay.com"
+    EMAIL_HOST = 'mail.vandelay.com'
     EMAIL_PORT = 25
-    # EMAIL_HOST_USER = "servers"
-    # EMAIL_HOST_PASSWORD = "s3cr3t"
+    # EMAIL_HOST_USER = 'servers'
+    # EMAIL_HOST_PASSWORD = 's3cr3t'
 
 .. _conf-events:
 
@@ -1272,10 +1505,36 @@ CELERY_SEND_TASK_SENT_EVENT
 
 .. versionadded:: 2.2
 
-If enabled, a `task-sent` event will be sent for every task so tasks can be
+If enabled, a :event:`task-sent` event will be sent for every task so tasks can be
 tracked before they are consumed by a worker.
 
 Disabled by default.
+
+.. setting:: CELERY_EVENT_QUEUE_TTL
+
+CELERY_EVENT_QUEUE_TTL
+~~~~~~~~~~~~~~~~~~~~~~
+:transports supported: ``amqp``
+
+Message expiry time in seconds (int/float) for when messages sent to a monitor clients
+event queue is deleted (``x-message-ttl``)
+
+For example, if this value is set to 10 then a message delivered to this queue
+will be deleted after 10 seconds.
+
+Disabled by default.
+
+.. setting:: CELERY_EVENT_QUEUE_EXPIRES
+
+CELERY_EVENT_QUEUE_EXPIRES
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+:transports supported: ``amqp``
+
+
+Expiry time in seconds (int/float) for when a monitor clients
+event queue will be deleted (``x-expires``).
+
+Default is never, relying on the queue autodelete setting.
 
 .. setting:: CELERY_EVENT_SERIALIZER
 
@@ -1283,7 +1542,7 @@ CELERY_EVENT_SERIALIZER
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Message serialization format used when sending event messages.
-Default is `"json"`. See :ref:`executing-serializers`.
+Default is ``json``. See :ref:`calling-serializers`.
 
 .. _conf-broadcast:
 
@@ -1299,7 +1558,7 @@ Name prefix for the queue used when listening for broadcast messages.
 The workers host name will be appended to the prefix to create the final
 queue name.
 
-Default is `"celeryctl"`.
+Default is ``celeryctl``.
 
 .. setting:: CELERY_BROADCAST_EXCHANGE
 
@@ -1308,14 +1567,14 @@ CELERY_BROADCAST_EXCHANGE
 
 Name of the exchange used for broadcast messages.
 
-Default is `"celeryctl"`.
+Default is ``celeryctl``.
 
 .. setting:: CELERY_BROADCAST_EXCHANGE_TYPE
 
 CELERY_BROADCAST_EXCHANGE_TYPE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Exchange type used for broadcast messages.  Default is `"fanout"`.
+Exchange type used for broadcast messages.  Default is ``fanout``.
 
 .. _conf-logging:
 
@@ -1329,11 +1588,10 @@ CELERYD_HIJACK_ROOT_LOGGER
 
 .. versionadded:: 2.2
 
-By default any previously configured logging options will be reset,
-because the Celery programs "hijacks" the root logger.
-
-If you want to customize your own logging then you can disable
-this behavior.
+By default any previously configured handlers on the root logger will be
+removed. If you want to customize your own logging handlers, then you
+can disable this behavior by setting
+`CELERYD_HIJACK_ROOT_LOGGER = False`.
 
 .. note::
 
@@ -1370,7 +1628,7 @@ CELERYD_TASK_LOG_FORMAT
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The format to use for log messages logged in tasks.  Can be overridden using
-the :option:`--loglevel` option to :mod:`~celery.bin.celeryd`.
+the :option:`--loglevel` option to :mod:`~celery.bin.worker`.
 
 Default is::
 
@@ -1389,7 +1647,7 @@ If enabled `stdout` and `stderr` will be redirected
 to the current logger.
 
 Enabled by default.
-Used by :program:`celeryd` and :program:`celerybeat`.
+Used by :program:`celery worker` and :program:`celery beat`.
 
 .. setting:: CELERY_REDIRECT_STDOUTS_LEVEL
 
@@ -1443,15 +1701,6 @@ The directory containing X.509 certificates used for
 Custom Component Classes (advanced)
 -----------------------------------
 
-.. setting:: CELERYD_BOOT_STEPS
-
-CELERYD_BOOT_STEPS
-~~~~~~~~~~~~~~~~~~
-
-This setting enables you to add additional components to the worker process.
-It should be a list of module names with :class:`celery.abstract.Component`
-classes, that augments functionality in the worker.
-
 .. setting:: CELERYD_POOL
 
 CELERYD_POOL
@@ -1459,10 +1708,23 @@ CELERYD_POOL
 
 Name of the pool class used by the worker.
 
-You can use a custom pool class name, or select one of
-the built-in aliases: ``processes``, ``eventlet``, ``gevent``.
+.. admonition:: Eventlet/Gevent
 
-Default is ``processes``.
+    Never use this option to select the eventlet or gevent pool.
+    You must use the `-P` option instead, otherwise the monkey patching
+    will happen too late and things will break in strange and silent ways.
+
+Default is ``celery.concurrency.prefork:TaskPool``.
+
+.. setting:: CELERYD_POOL_RESTARTS
+
+CELERYD_POOL_RESTARTS
+~~~~~~~~~~~~~~~~~~~~~
+
+If enabled the worker pool can be restarted using the
+:control:`pool_restart` remote control command.
+
+Disabled by default.
 
 .. setting:: CELERYD_AUTOSCALER
 
@@ -1473,7 +1735,7 @@ CELERYD_AUTOSCALER
 
 Name of the autoscaler class to use.
 
-Default is ``"celery.worker.autoscale.Autoscaler"``.
+Default is ``celery.worker.autoscale:Autoscaler``.
 
 .. setting:: CELERYD_AUTORELOADER
 
@@ -1483,7 +1745,7 @@ CELERYD_AUTORELOADER
 Name of the autoreloader class used by the worker to reload
 Python modules and files that have changed.
 
-Default is: ``"celery.worker.autoreload.Autoreloader"``.
+Default is: ``celery.worker.autoreload:Autoreloader``.
 
 .. setting:: CELERYD_CONSUMER
 
@@ -1493,17 +1755,9 @@ CELERYD_CONSUMER
 Name of the consumer class used by the worker.
 Default is :class:`celery.worker.consumer.Consumer`
 
-.. setting:: CELERYD_MEDIATOR
+.. setting:: CELERYD_TIMER
 
-CELERYD_MEDIATOR
-~~~~~~~~~~~~~~~~
-
-Name of the mediator class used by the worker.
-Default is :class:`celery.worker.controllers.Mediator`.
-
-.. setting:: CELERYD_ETA_SCHEDULER
-
-CELERYD_ETA_SCHEDULER
+CELERYD_TIMER
 ~~~~~~~~~~~~~~~~~~~~~
 
 Name of the ETA scheduler class used by the worker.
@@ -1512,15 +1766,15 @@ by the pool implementation.
 
 .. _conf-celerybeat:
 
-Periodic Task Server: celerybeat
---------------------------------
+Periodic Task Server: celery beat
+---------------------------------
 
 .. setting:: CELERYBEAT_SCHEDULE
 
 CELERYBEAT_SCHEDULE
 ~~~~~~~~~~~~~~~~~~~
 
-The periodic task schedule used by :mod:`~celery.bin.celerybeat`.
+The periodic task schedule used by :mod:`~celery.bin.beat`.
 See :ref:`beat-entries`.
 
 .. setting:: CELERYBEAT_SCHEDULER
@@ -1528,11 +1782,10 @@ See :ref:`beat-entries`.
 CELERYBEAT_SCHEDULER
 ~~~~~~~~~~~~~~~~~~~~
 
-The default scheduler class.  Default is
-`"celery.beat.PersistentScheduler"`.
+The default scheduler class.  Default is ``celery.beat:PersistentScheduler``.
 
 Can also be set via the :option:`-S` argument to
-:mod:`~celery.bin.celerybeat`.
+:mod:`~celery.bin.beat`.
 
 .. setting:: CELERYBEAT_SCHEDULE_FILENAME
 
@@ -1544,15 +1797,36 @@ of periodic tasks.  Can be a relative or absolute path, but be aware that the
 suffix `.db` may be appended to the file name (depending on Python version).
 
 Can also be set via the :option:`--schedule` argument to
-:mod:`~celery.bin.celerybeat`.
+:mod:`~celery.bin.beat`.
+
+.. setting:: CELERYBEAT_SYNC_EVERY
+
+CELERYBEAT_SYNC_EVERY
+~~~~~~~~~~~~~~~~~~~~~
+
+The number of periodic tasks that can be called before another database sync
+is issued.
+Defaults to 0 (sync based on timing - default of 3 minutes as determined by
+scheduler.sync_every). If set to 1, beat will call sync after every task
+message sent.
 
 .. setting:: CELERYBEAT_MAX_LOOP_INTERVAL
 
 CELERYBEAT_MAX_LOOP_INTERVAL
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The maximum number of seconds :mod:`~celery.bin.celerybeat` can sleep
-between checking the schedule.  Default is 300 seconds (5 minutes).
+The maximum number of seconds :mod:`~celery.bin.beat` can sleep
+between checking the schedule.
+
+The default for this value is scheduler specific.
+For the default celery beat scheduler the value is 300 (5 minutes),
+but for e.g. the django-celery database scheduler it is 5 seconds
+because the schedule may be changed externally, and so it must take
+changes to the schedule into account.
+
+Also when running celery beat embedded (:option:`-B`) on Jython as a thread
+the max interval is overridden and set to 1 so that it's possible
+to shut down in a timely manner.
 
 
 .. _conf-celerymon:
@@ -1572,135 +1846,3 @@ Default is `[%(asctime)s: %(levelname)s/%(processName)s] %(message)s`
 
 See the Python :mod:`logging` module for more information about log
 formats.
-
-.. _conf-deprecated:
-
-Deprecated Settings
--------------------
-
-These settings have been deprecated and should no longer used,
-as they will be removed in future versions.
-
-.. setting:: CELERY_AMQP_TASK_RESULT_EXPIRES
-
-CELERY_AMQP_TASK_RESULT_EXPIRES
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.5
-
-The time in seconds of which the task result queues should expire.
-
-This setting is deprecated, and will be removed in version 3.0.
-Please use :setting:`CELERY_TASK_RESULT_EXPIRES` instead.
-
-.. note::
-
-    AMQP result expiration requires RabbitMQ versions 2.1.0 or higher.
-
-.. setting:: CELERY_TASK_ERROR_WHITELIST
-
-CELERY_TASK_ERROR_WHITELIST
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.5
-
-A white list of exceptions to send error emails for.
-
-This option is pending deprecation and is scheduled for removal
-in version 3.0.
-
-.. setting:: CELERYD_LOG_FILE
-
-CELERYD_LOG_FILE
-~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.4
-
-This option is deprecated and is scheduled for removal in version 3.0.
-Please use the :option:`--logfile` argument instead.
-
-The default file name the worker daemon logs messages to.  Can be overridden
-using the :option:`--logfile` option to :mod:`~celery.bin.celeryd`.
-
-The default is :const:`None` (`stderr`)
-
-.. setting:: CELERYD_LOG_LEVEL
-
-CELERYD_LOG_LEVEL
-~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.4
-
-This option is deprecated and is scheduled for removal in version 3.0.
-Please use the :option:`--loglevel` argument instead.
-
-Worker log level, can be one of :const:`DEBUG`, :const:`INFO`, :const:`WARNING`,
-:const:`ERROR` or :const:`CRITICAL`.
-
-Can also be set via the :option:`--loglevel` argument to
-:mod:`~celery.bin.celeryd`.
-
-See the :mod:`logging` module for more information.
-
-.. setting:: CELERYBEAT_LOG_FILE
-
-CELERYBEAT_LOG_FILE
-~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.4
-
-This option is deprecated and is scheduled for removal in version 3.0.
-Please use the :option:`--logfile` argument instead.
-
-The default file name to log messages to.  Can be overridden using
-the `--logfile` option to :mod:`~celery.bin.celerybeat`.
-
-The default is :const:`None` (`stderr`).
-
-.. setting:: CELERYBEAT_LOG_LEVEL
-
-CELERYBEAT_LOG_LEVEL
-~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.4
-
-This option is deprecated and is scheduled for removal in version 3.0.
-Please use the :option:`--loglevel` argument instead.
-
-Logging level. Can be any of :const:`DEBUG`, :const:`INFO`, :const:`WARNING`,
-:const:`ERROR`, or :const:`CRITICAL`.
-
-Can also be set via the :option:`--loglevel` argument to
-:mod:`~celery.bin.celerybeat`.
-
-See the :mod:`logging` module for more information.
-
-.. setting:: CELERYMON_LOG_FILE
-
-CELERYMON_LOG_FILE
-~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.4
-
-This option is deprecated and is scheduled for removal in version 3.0.
-Please use the :option:`--logfile` argument instead.
-
-The default file name to log messages to.  Can be overridden using
-the :option:`--logfile` argument to `celerymon`.
-
-The default is :const:`None` (`stderr`)
-
-.. setting:: CELERYMON_LOG_LEVEL
-
-CELERYMON_LOG_LEVEL
-~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 2.4
-
-This option is deprecated and is scheduled for removal in version 3.0.
-Please use the :option:`--loglevel` argument instead.
-
-Logging level. Can be any of :const:`DEBUG`, :const:`INFO`, :const:`WARNING`,
-:const:`ERROR`, or :const:`CRITICAL`.
-
-See the :mod:`logging` module for more information.

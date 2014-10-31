@@ -1,5 +1,7 @@
 .. _internals-task-message-protocol:
 
+.. _task-message-protocol-v1:
+
 =======================
  Task Messages
 =======================
@@ -11,48 +13,48 @@ Message format
 ==============
 
 * task
-    `string`
+    :`string`:
 
     Name of the task. **required**
 
 * id
-    `string`
+    :`string`:
 
     Unique id of the task (UUID). **required**
 
 * args
-    `list`
+    :`list`:
 
     List of arguments. Will be an empty list if not provided.
 
 * kwargs
-    `dictionary`
+    :`dictionary`:
 
     Dictionary of keyword arguments. Will be an empty dictionary if not
     provided.
 
 * retries
-    `int`
+    :`int`:
 
     Current number of times this task has been retried.
     Defaults to `0` if not specified.
 
 * eta
-    `string` (ISO 8601)
+    :`string` (ISO 8601):
 
     Estimated time of arrival. This is the date and time in ISO 8601
     format. If not provided the message is not scheduled, but will be
     executed asap.
 
 * expires
-    `string` (ISO 8601)
+    :`string` (ISO 8601):
+
     .. versionadded:: 2.0.2
 
     Expiration date. This is the date and time in ISO 8601 format.
     If not provided the message will never expire. The message
     will be expired when the message is received and the expiration date
     has been exceeded.
-
 
 Extensions
 ==========
@@ -64,24 +66,54 @@ to process it.
 
 
 * taskset
-  `string`
+    :`string`:
 
-  The taskset this task is part of.
+    The taskset this task is part of (if any).
 
 * chord
-  `object`
-  .. versionadded:: 2.3
+    :`subtask`:
 
-  Signifies that this task is one of the header parts of a chord.  The value
-  of this key is the body of the cord that should be executed when all of
-  the tasks in the header has returned.
+    .. versionadded:: 2.3
+
+    Signifies that this task is one of the header parts of a chord.  The value
+    of this key is the body of the cord that should be executed when all of
+    the tasks in the header has returned.
 
 * utc
-  `bool`
-  .. versionadded:: 2.5
+    :`bool`:
 
-  If true time uses the UTC timezone, if not the current local timezone
-  should be used.
+    .. versionadded:: 2.5
+
+    If true time uses the UTC timezone, if not the current local timezone
+    should be used.
+
+* callbacks
+    :`<list>subtask`:
+
+    .. versionadded:: 3.0
+
+    A list of subtasks to apply if the task exited successfully.
+
+* errbacks
+    :`<list>subtask`:
+
+    .. versionadded:: 3.0
+
+    A list of subtasks to apply if an error occurs while executing the task.
+
+* timelimit
+    :`<tuple>(float, float)`:
+
+    .. versionadded:: 3.1
+
+    Task execution time limit settings. This is a tuple of hard and soft time
+    limit value (`int`/`float` or :const:`None` for no limit).
+
+    Example value specifying a soft time limit of 3 seconds, and a hard time
+    limt of 10 seconds::
+
+        {'timelimit': (3.0, 10.0)}
+
 
 Example message
 ===============

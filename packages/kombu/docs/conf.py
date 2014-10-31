@@ -28,8 +28,8 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'Kombu'
-copyright = u'2009-2012, Ask Solem'
+project = 'Kombu'
+copyright = '2009-2014, Ask Solem'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -46,7 +46,7 @@ exclude_trees = ['.build']
 add_function_parentheses = True
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'trac'
+pygments_style = 'colorful'
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -62,8 +62,8 @@ html_use_modindex = True
 html_use_index = True
 
 latex_documents = [
-  ('index', 'Kombu.tex', ur'Kombu Documentation',
-   ur'Ask Solem', 'manual'),
+    ('index', 'Kombu.tex', 'Kombu Documentation',
+     'Ask Solem', 'manual'),
 ]
 
 html_theme = "celery"

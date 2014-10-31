@@ -1,41 +1,44 @@
+# -*- coding: utf-8 -*-
 """
 kombu.mixins
 ============
 
 Useful mixin classes.
 
-:copyright: (c) 2009 - 2012 by Ask Solem.
-:license: BSD, see LICENSE for more details.
-
 """
 from __future__ import absolute_import
-from __future__ import with_statement
 
 import socket
 
 from contextlib import contextmanager
 from functools import partial
 from itertools import count
+from time import sleep
 
+from .common import ignore_errors
+from .five import range
 from .messaging import Consumer
-from .log import LogMixin
+from .log import get_logger
 from .utils import cached_property, nested
 from .utils.encoding import safe_repr
 from .utils.limits import TokenBucket
 
-__all__ = ["ConsumerMixin"]
+__all__ = ['ConsumerMixin']
+
+logger = get_logger(__name__)
+debug, info, warn, error = logger.debug, logger.info, logger.warn, logger.error
 
 
-class ConsumerMixin(LogMixin):
-    """Convenience mixin for implementing consumer threads.
+class ConsumerMixin(object):
+    """Convenience mixin for implementing consumer programs.
 
     It can be used outside of threads, with threads, or greenthreads
     (eventlet/gevent) too.
 
     The basic class would need a :attr:`connection` attribute
-    which must be a :class:`~kombu.connection.BrokerConnection` instance,
+    which must be a :class:`~kombu.Connection` instance,
     and define a :meth:`get_consumers` method that returns a list
-    of :class:`kombu.messaging.Consumer` instances to use.
+    of :class:`kombu.Consumer` instances to use.
     Supporting multiple consumers is important so that multiple
     channels can be used for different QoS requirements.
 
@@ -45,7 +48,7 @@ class ConsumerMixin(LogMixin):
 
 
         class Worker(ConsumerMixin):
-            task_queue = Queue("tasks", Exchange("tasks"), "tasks"))
+            task_queue = Queue('tasks', Exchange('tasks'), 'tasks'))
 
             def __init__(self, connection):
                 self.connection = None
@@ -55,7 +58,7 @@ class ConsumerMixin(LogMixin):
                                  callback=[self.on_task])]
 
             def on_task(self, body, message):
-                print("Got task: %r" % (body, ))
+                print('Got task: {0!r}'.format(body))
                 message.ack()
 
     **Additional handler methods**:
@@ -79,7 +82,7 @@ class ConsumerMixin(LogMixin):
 
         * :meth:`on_connection_revived`
 
-            Handler called when the connection is re-established
+            Handler called as soon as the connection is re-established
             after connection failure.
 
             Takes no arguments.
@@ -129,7 +132,7 @@ class ConsumerMixin(LogMixin):
     should_stop = False
 
     def get_consumers(self, Consumer, channel):
-        raise NotImplementedError("Subclass responsibility")
+        raise NotImplementedError('Subclass responsibility')
 
     def on_connection_revived(self):
         pass
@@ -144,66 +147,73 @@ class ConsumerMixin(LogMixin):
         pass
 
     def on_decode_error(self, message, exc):
-        self.critical(
-            "Can't decode message body: %r (type:%r encoding:%r raw:%r')",
-                    exc, message.content_type, message.content_encoding,
-                    safe_repr(message.body))
+        error("Can't decode message body: %r (type:%r encoding:%r raw:%r')",
+              exc, message.content_type, message.content_encoding,
+              safe_repr(message.body))
         message.ack()
 
     def on_connection_error(self, exc, interval):
-        self.error("Broker connection error: %r. "
-                   "Trying again in %s seconds.", exc, interval)
+        warn('Broker connection error: %r. '
+             'Trying again in %s seconds.', exc, interval)
 
     @contextmanager
     def extra_context(self, connection, channel):
         yield
 
-    def run(self):
+    def run(self, _tokens=1):
+        restart_limit = self.restart_limit
+        errors = (self.connection.connection_errors +
+                  self.connection.channel_errors)
         while not self.should_stop:
             try:
-                if self.restart_limit.can_consume(1):
-                    for _ in self.consume(limit=None):
+                if restart_limit.can_consume(_tokens):
+                    for _ in self.consume(limit=None):  # pragma: no cover
                         pass
-            except self.connection.connection_errors:
-                self.error("Connection to broker lost. "
-                           "Trying to re-establish the connection...")
+                else:
+                    sleep(restart_limit.expected_time(_tokens))
+            except errors:
+                warn('Connection to broker lost. '
+                     'Trying to re-establish the connection...')
 
-    def consume(self, limit=None, timeout=None, safety_interval=1, **kwargs):
-        elapsed = 0
+    @contextmanager
+    def consumer_context(self, **kwargs):
         with self.Consumer() as (connection, channel, consumers):
             with self.extra_context(connection, channel):
                 self.on_consume_ready(connection, channel, consumers, **kwargs)
-                for i in limit and xrange(limit) or count():
-                    if self.should_stop:
-                        break
-                    self.on_iteration()
-                    try:
-                        connection.drain_events(timeout=safety_interval)
-                    except socket.timeout:
-                        elapsed += safety_interval
-                        if timeout and elapsed >= timeout:
-                            raise socket.timeout()
-                    except socket.error:
-                        if not self.should_stop:
-                            raise
-                    else:
-                        yield
-                        elapsed = 0
-        self.debug("consume exiting")
+                yield connection, channel, consumers
+
+    def consume(self, limit=None, timeout=None, safety_interval=1, **kwargs):
+        elapsed = 0
+        with self.consumer_context(**kwargs) as (conn, channel, consumers):
+            for i in limit and range(limit) or count():
+                if self.should_stop:
+                    break
+                self.on_iteration()
+                try:
+                    conn.drain_events(timeout=safety_interval)
+                except socket.timeout:
+                    conn.heartbeat_check()
+                    elapsed += safety_interval
+                    if timeout and elapsed >= timeout:
+                        raise
+                except socket.error:
+                    if not self.should_stop:
+                        raise
+                else:
+                    yield
+                    elapsed = 0
+        debug('consume exiting')
 
     def maybe_conn_error(self, fun):
-        """Applies function but ignores any connection or channel
-        errors raised."""
-        try:
-            fun()
-        except (AttributeError, ) + \
-                self.connection_errors + \
-                self.channel_errors:
-            pass
+        """Use :func:`kombu.common.ignore_errors` instead."""
+        return ignore_errors(self, fun)
+
+    def create_connection(self):
+        return self.connection.clone()
 
     @contextmanager
     def establish_connection(self):
-        with self.connection.clone() as conn:
+        with self.create_connection() as conn:
             conn.ensure_connection(self.on_connection_error,
                                    self.connect_max_retries)
             yield conn
@@ -212,15 +222,15 @@ class ConsumerMixin(LogMixin):
     def Consumer(self):
         with self.establish_connection() as conn:
             self.on_connection_revived()
-            self.info("Connected to %s", conn.as_uri())
+            info('Connected to %s', conn.as_uri())
             channel = conn.default_channel
             cls = partial(Consumer, channel,
                           on_decode_error=self.on_decode_error)
             with self._consume_from(*self.get_consumers(cls, channel)) as c:
                 yield conn, channel, c
-            self.debug("Consumers cancelled")
+            debug('Consumers cancelled')
             self.on_consume_end(conn, channel)
-        self.debug("Connection closed")
+        debug('Connection closed')
 
     def _consume_from(self, *consumers):
         return nested(*consumers)

@@ -1,1 +1,0 @@
-django-celery-2.5.5/Changelog

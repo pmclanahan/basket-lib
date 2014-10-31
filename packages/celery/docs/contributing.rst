@@ -4,6 +4,22 @@
  Contributing
 ==============
 
+Welcome!
+
+This document is fairly extensive and you are not really expected
+to study this in detail for small contributions;
+
+    The most important rule is that contributing must be easy
+    and that the community is friendly and not nitpicking on details
+    such as coding style.
+
+If you're reporting a bug you should read the Reporting bugs section
+below to ensure that your bug report contains enough information
+to successfully diagnose the issue, and if you're contributing code
+you should try to mimic the conventions you see surrounding the code
+you are working on, but in the end all patches will be cleaned up by
+the person merging the changes so don't worry too much.
+
 .. contents::
     :local:
 
@@ -32,7 +48,7 @@ Be considerate.
 Your work will be used by other people, and you in turn will depend on the
 work of others.  Any decision you take will affect users and colleagues, and
 we expect you to take those consequences into account when making decisions.
-Even if it's not obvious at the time, our contributions to Ubuntu will impact
+Even if it's not obvious at the time, our contributions to Celery will impact
 the work of others.  For example, changes to code, infrastructure, policy,
 documentation and translations during a release may negatively impact
 others work.
@@ -96,45 +112,119 @@ can pick up where you leave off.
 
 .. _reporting-bugs:
 
-Reporting a Bug
-===============
+
+Reporting Bugs
+==============
+
+.. _vulnsec:
+
+Security
+--------
+
+You must never report security related issues, vulnerabilities or bugs
+including sensitive information to the bug tracker, or elsewhere in public.
+Instead sensitive bugs must be sent by email to ``security@celeryproject.org``.
+
+If you'd like to submit the information encrypted our PGP key is::
+
+    -----BEGIN PGP PUBLIC KEY BLOCK-----
+    Version: GnuPG v1.4.15 (Darwin)
+
+    mQENBFJpWDkBCADFIc9/Fpgse4owLNvsTC7GYfnJL19XO0hnL99sPx+DPbfr+cSE
+    9wiU+Wp2TfUX7pCLEGrODiEP6ZCZbgtiPgId+JYvMxpP6GXbjiIlHRw1EQNH8RlX
+    cVxy3rQfVv8PGGiJuyBBjxzvETHW25htVAZ5TI1+CkxmuyyEYqgZN2fNd0wEU19D
+    +c10G1gSECbCQTCbacLSzdpngAt1Gkrc96r7wGHBBSvDaGDD2pFSkVuTLMbIRrVp
+    lnKOPMsUijiip2EMr2DvfuXiUIUvaqInTPNWkDynLoh69ib5xC19CSVLONjkKBsr
+    Pe+qAY29liBatatpXsydY7GIUzyBT3MzgMJlABEBAAG0MUNlbGVyeSBTZWN1cml0
+    eSBUZWFtIDxzZWN1cml0eUBjZWxlcnlwcm9qZWN0Lm9yZz6JATgEEwECACIFAlJp
+    WDkCGwMGCwkIBwMCBhUIAgkKCwQWAgMBAh4BAheAAAoJEOArFOUDCicIw1IH/26f
+    CViDC7/P13jr+srRdjAsWvQztia9HmTlY8cUnbmkR9w6b6j3F2ayw8VhkyFWgYEJ
+    wtPBv8mHKADiVSFARS+0yGsfCkia5wDSQuIv6XqRlIrXUyqJbmF4NUFTyCZYoh+C
+    ZiQpN9xGhFPr5QDlMx2izWg1rvWlG1jY2Es1v/xED3AeCOB1eUGvRe/uJHKjGv7J
+    rj0pFcptZX+WDF22AN235WYwgJM6TrNfSu8sv8vNAQOVnsKcgsqhuwomSGsOfMQj
+    LFzIn95MKBBU1G5wOs7JtwiV9jefGqJGBO2FAvOVbvPdK/saSnB+7K36dQcIHqms
+    5hU4Xj0RIJiod5idlRC5AQ0EUmlYOQEIAJs8OwHMkrdcvy9kk2HBVbdqhgAREMKy
+    gmphDp7prRL9FqSY/dKpCbG0u82zyJypdb7QiaQ5pfPzPpQcd2dIcohkkh7G3E+e
+    hS2L9AXHpwR26/PzMBXyr2iNnNc4vTksHvGVDxzFnRpka6vbI/hrrZmYNYh9EAiv
+    uhE54b3/XhXwFgHjZXb9i8hgJ3nsO0pRwvUAM1bRGMbvf8e9F+kqgV0yWYNnh6QL
+    4Vpl1+epqp2RKPHyNQftbQyrAHXT9kQF9pPlx013MKYaFTADscuAp4T3dy7xmiwS
+    crqMbZLzfrxfFOsNxTUGE5vmJCcm+mybAtRo4aV6ACohAO9NevMx8pUAEQEAAYkB
+    HwQYAQIACQUCUmlYOQIbDAAKCRDgKxTlAwonCNFbB/9esir/f7TufE+isNqErzR/
+    aZKZo2WzZR9c75kbqo6J6DYuUHe6xI0OZ2qZ60iABDEZAiNXGulysFLCiPdatQ8x
+    8zt3DF9BMkEck54ZvAjpNSern6zfZb1jPYWZq3TKxlTs/GuCgBAuV4i5vDTZ7xK/
+    aF+OFY5zN7ciZHkqLgMiTZ+RhqRcK6FhVBP/Y7d9NlBOcDBTxxE1ZO1ute6n7guJ
+    ciw4hfoRk8qNN19szZuq3UU64zpkM2sBsIFM9tGF2FADRxiOaOWZHmIyVZriPFqW
+    RUwjSjs7jBVNq0Vy4fCu/5+e+XLOUBOoqtM5W7ELt0t1w9tXebtPEetV86in8fU2
+    =0chn
+    -----END PGP PUBLIC KEY BLOCK-----
+
+Other bugs
+----------
 
 Bugs can always be described to the :ref:`mailing-list`, but the best
 way to report an issue and to ensure a timely response is to use the
 issue tracker.
 
-1) Create a GitHub account.
+1) **Create a GitHub account.**
 
 You need to `create a GitHub account`_ to be able to create new issues
 and participate in the discussion.
 
 .. _`create a GitHub account`: https://github.com/signup/free
 
-2) Determine if your bug is really a bug.
+2) **Determine if your bug is really a bug.**
 
 You should not file a bug if you are requesting support.  For that you can use
 the :ref:`mailing-list`, or :ref:`irc-channel`.
 
-3) Make sure your bug hasn't already been reported.
+3) **Make sure your bug hasn't already been reported.**
 
 Search through the appropriate Issue tracker.  If a bug like yours was found,
 check if you have new information that could be reported to help
 the developers fix the bug.
 
-4) Collect information about the bug.
+4) **Check if you're using the latest version.**
+
+A bug could be fixed by some other improvements and fixes - it might not have an
+existing report in the bug tracker. Make sure you're using the latest releases of
+celery, billiard and kombu.
+
+5) **Collect information about the bug.**
 
 To have the best chance of having a bug fixed, we need to be able to easily
 reproduce the conditions that caused it.  Most of the time this information
 will be from a Python traceback message, though some bugs might be in design,
 spelling or other errors on the website/docs/code.
 
-If the error is from a Python traceback, include it in the bug report.
+    A) If the error is from a Python traceback, include it in the bug report.
 
-We also need to know what platform you're running (Windows, OSX, Linux, etc),
-the version of your Python interpreter, and the version of Celery, and related
-packages that you were running when the bug occurred.
+    B) We also need to know what platform you're running (Windows, OS X, Linux,
+       etc.), the version of your Python interpreter, and the version of Celery,
+       and related packages that you were running when the bug occurred.
 
-5) Submit the bug.
+    C) If you are reporting a race condition or a deadlock, tracebacks can be
+       hard to get or might not be that useful. Try to inspect the process to
+       get more diagnostic data. Some ideas:
+
+       * Enable celery's :ref:`breakpoint signal <breakpoint_signal>` and use it
+         to inspect the process's state.  This will allow you to open a
+         :mod:`pdb` session.
+       * Collect tracing data using strace_(Linux), dtruss (OSX) and ktrace(BSD),
+         ltrace_ and lsof_.
+
+    D) Include the output from the `celery report` command:
+
+        .. code-block:: bash
+
+            $ celery -A proj report
+
+        This will also include your configuration settings and it try to
+        remove values for keys known to be sensitive, but make sure you also
+        verify the information before submitting so that it doesn't contain
+        confidential information like API tokens and authentication
+        credentials.
+
+6) **Submit the bug.**
 
 By default `GitHub`_ will email you to let you know when new comments have
 been made on your bug. In the event you've turned this feature off, you
@@ -142,6 +232,9 @@ should check back on occasion to ensure you don't miss any questions a
 developer trying to fix the bug might ask.
 
 .. _`GitHub`: http://github.com
+.. _`strace`: http://en.wikipedia.org/wiki/Strace
+.. _`ltrace`: http://en.wikipedia.org/wiki/Ltrace
+.. _`lsof`: http://en.wikipedia.org/wiki/Lsof
 
 .. _issue-trackers:
 
@@ -152,12 +245,21 @@ Bugs for a package in the Celery ecosystem should be reported to the relevant
 issue tracker.
 
 * Celery: http://github.com/celery/celery/issues/
-* Django-Celery: http://github.com/celery/django-celery/issues
-* Celery-Pylons: http://bitbucket.org/ianschenck/celery-pylons/issues
 * Kombu: http://github.com/celery/kombu/issues
+* pyamqp: http://github.com/celery/pyamqp/issues
+* librabbitmq: http://github.com/celery/librabbitmq/issues
+* Django-Celery: http://github.com/celery/django-celery/issues
 
 If you are unsure of the origin of the bug you can ask the
 :ref:`mailing-list`, or just use the Celery issue tracker.
+
+Contributors guide to the codebase
+==================================
+
+There's a separate section for internal details,
+including details about the codebase and a style guide.
+
+Read :ref:`internals-guide` for more!
 
 .. _versions:
 
@@ -180,7 +282,8 @@ Branches
 Current active version branches:
 
 * master (http://github.com/celery/celery/tree/master)
-* 3.0-devel (http://github.com/celery/celery/tree/3.0-devel)
+* 3.1 (http://github.com/celery/celery/tree/3.1)
+* 3.0 (http://github.com/celery/celery/tree/3.0)
 
 You can see the state of any branch by looking at the Changelog:
 
@@ -226,18 +329,13 @@ for the 2.2.x series is named ``2.2``.  Previously these were named
 
 The versions we currently maintain is:
 
-* 2.3
+* 3.1
 
   This is the current series.
 
-* 2.2
+* 3.0
 
-  This is the previous series, and the last version to support Python 2.4.
-
-* 2.1
-
-  This is the last version to use the ``carrot`` AMQP framework.
-  Recent versions use ``kombu``.
+  This is the previous series, and the last version to support Python 2.5.
 
 Archived branches
 -----------------
@@ -249,6 +347,12 @@ on a series that is no longer officially supported.
 An archived version is named ``X.Y-archived``.
 
 Our currently archived branches are:
+
+* 2.5-archived
+
+* 2.4-archived
+
+* 2.3-archived
 
 * 2.1-archived
 
@@ -296,19 +400,25 @@ First you need to fork the Celery repository, a good introduction to this
 is in the Github Guide: `Fork a Repo`_.
 
 After you have cloned the repository you should checkout your copy
-to a directory on your machine::
+to a directory on your machine:
+
+.. code-block:: bash
 
     $ git clone git@github.com:username/celery.git
 
 When the repository is cloned enter the directory to set up easy access
-to upstream changes::
+to upstream changes:
+
+.. code-block:: bash
 
     $ cd celery
     $ git remote add upstream git://github.com/celery/celery.git
     $ git fetch upstream
 
 If you need to pull in new changes from upstream you should
-always use the :option:`--rebase` option to ``git pull``::
+always use the :option:`--rebase` option to ``git pull``:
+
+.. code-block:: bash
 
     git pull --rebase upstream master
 
@@ -321,8 +431,6 @@ If you need to work on a different branch than ``master`` you can
 fetch and checkout a remote branch like this::
 
     git checkout --track -b 3.0-devel origin/3.0-devel
-
-For a list of branches see :ref:`git-branches`.
 
 .. _`Fork a Repo`: http://help.github.com/fork-a-repo/
 .. _`Rebasing merge commits in git`:
@@ -338,12 +446,16 @@ To run the Celery test suite you need to install a few dependencies.
 A complete list of the dependencies needed are located in
 :file:`requirements/test.txt`.
 
-Installing the test requirements::
+Installing the test requirements:
 
-    $ pip -E $VIRTUAL_ENV install -U -r requirements/test.txt
+.. code-block:: bash
+
+    $ pip install -U -r requirements/test.txt
 
 When installation of dependencies is complete you can execute
-the test suite by calling ``nosetests``::
+the test suite by calling ``nosetests``:
+
+.. code-block:: bash
 
     $ nosetests
 
@@ -366,7 +478,9 @@ Some useful options to :program:`nosetests` are:
     Run with verbose output.
 
 If you want to run the tests for a single test file only
-you can do so like this::
+you can do so like this:
+
+.. code-block:: bash
 
     $ nosetests celery.tests.test_worker.test_worker_job
 
@@ -392,16 +506,28 @@ the steps outlined here: http://bit.ly/koJoso
 Calculating test coverage
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Code coverage in HTML::
+To calculate test coverage you must first install the :mod:`coverage` module.
 
-    $ nosetests --with-coverage3 --cover3-html
+Installing the :mod:`coverage` module:
+
+.. code-block:: bash
+
+    $ pip install -U coverage
+
+Code coverage in HTML:
+
+.. code-block:: bash
+
+    $ nosetests --with-coverage --cover-html
 
 The coverage output will then be located at
 :file:`celery/tests/cover/index.html`.
 
-Code coverage in XML (Cobertura-style)::
+Code coverage in XML (Cobertura-style):
 
-    $ nosetests --with-coverage3 --cover3-xml --cover3-xml-file=coverage.xml
+.. code-block:: bash
+
+    $ nosetests --with-coverage --cover-xml --cover-xml-file=coverage.xml
 
 The coverage XML output will then be located at :file:`coverage.xml`
 
@@ -413,25 +539,33 @@ Running the tests on all supported Python versions
 There is a ``tox`` configuration file in the top directory of the
 distribution.
 
-To run the tests for all supported Python versions simply execute::
+To run the tests for all supported Python versions simply execute:
+
+.. code-block:: bash
 
     $ tox
 
 If you only want to test specific Python versions use the :option:`-e`
-option::
+option:
 
-    $ tox -e py25,py26
+.. code-block:: bash
+
+    $ tox -e py26
 
 Building the documentation
 --------------------------
 
 To build the documentation you need to install the dependencies
-listed in :file:`requirements/docs.txt`::
+listed in :file:`requirements/docs.txt`:
 
-    $ pip -E $VIRTUAL_ENV install -U -r requirements/docs.txt
+.. code-block:: bash
+
+    $ pip install -U -r requirements/docs.txt
 
 After these dependencies are installed you should be able to
-build the docs by running::
+build the docs by running:
+
+.. code-block:: bash
 
     $ cd docs
     $ rm -rf .build
@@ -448,20 +582,26 @@ Verifying your contribution
 To use these tools you need to install a few dependencies.  These dependencies
 can be found in :file:`requirements/pkgutils.txt`.
 
-Installing the dependencies::
+Installing the dependencies:
 
-    $ pip -E $VIRTUAL_ENV install -U -r requirements/pkgutils.txt
+.. code-block:: bash
+
+    $ pip install -U -r requirements/pkgutils.txt
 
 pyflakes & PEP8
 ~~~~~~~~~~~~~~~
 
 To ensure that your changes conform to PEP8 and to run pyflakes
-execute::
+execute:
+
+.. code-block:: bash
 
     $ paver flake8
 
 To not return a negative exit code when this command fails use the
-:option:`-E` option, this can be convenient while developing::
+:option:`-E` option, this can be convenient while developing:
+
+.. code-block:: bash
 
     $ paver flake8 -E
 
@@ -469,7 +609,9 @@ API reference
 ~~~~~~~~~~~~~
 
 To make sure that all modules have a corresponding section in the API
-reference please execute::
+reference please execute:
+
+.. code-block:: bash
 
     $ paver autodoc
     $ paver verifyindex
@@ -481,18 +623,38 @@ located in :file:`docs/internals/reference/`.  If the module is public
 it should be located in :file:`docs/reference/`.
 
 For example if reference is missing for the module ``celery.worker.awesome``
-and this module is considered part of the public API, use the following steps::
+and this module is considered part of the public API, use the following steps:
+
+
+Use an existing file as a template:
+
+.. code-block:: bash
 
     $ cd docs/reference/
     $ cp celery.schedules.rst celery.worker.awesome.rst
+
+Edit the file using your favorite editor:
+
+.. code-block:: bash
+
     $ vim celery.worker.awesome.rst
 
         # change every occurance of ``celery.schedules`` to
         # ``celery.worker.awesome``
 
+
+Edit the index using your favorite editor:
+
+.. code-block:: bash
+
     $ vim index.rst
 
         # Add ``celery.worker.awesome`` to the index.
+
+
+Commit your changes:
+
+.. code-block:: bash
 
     # Add the file to git
     $ git add celery.worker.awesome.rst
@@ -590,8 +752,8 @@ is following the conventions.
         from Queue import Queue, Empty
 
         from .datastructures import TokenBucket
+        from .five import zip_longest, items, range
         from .utils import timeutils
-        from .utils.compat import all, izip_longest, chain_from_iterable
 
 * Wildcard imports must not be used (`from xxx import *`).
 
@@ -602,7 +764,8 @@ is following the conventions.
 
         from __future__ import absolute_import
 
-    * If the module uses the with statement it must also enable that::
+    * If the module uses the with statement and must be compatible
+      with Python 2.5 (celery is not) then it must also enable that::
 
         from __future__ import with_statement
 
@@ -624,9 +787,70 @@ is following the conventions.
 * Note that we use "new-style` relative imports when the distribution
   does not support Python versions below 2.5
 
-.. code-block:: python
+    This requires Python 2.5 or later:
+
+    .. code-block:: python
 
         from . import submodule
+
+
+.. _feature-with-extras:
+
+Contributing features requiring additional libraries
+====================================================
+
+Some features like a new result backend may require additional libraries
+that the user must install.
+
+We use setuptools `extra_requires` for this, and all new optional features
+that require 3rd party libraries must be added.
+
+1) Add a new requirements file in `requirements/extras`
+
+    E.g. for the Cassandra backend this is
+    :file:`requirements/extras/cassandra.txt`, and the file looks like this::
+
+        pycassa
+
+    These are pip requirement files so you can have version specifiers and
+    multiple packages are separated by newline.  A more complex example could
+    be:
+
+        # pycassa 2.0 breaks Foo
+        pycassa>=1.0,<2.0
+        thrift
+
+2) Modify ``setup.py``
+
+    After the requirements file is added you need to add it as an option
+    to ``setup.py`` in the ``extras_require`` section::
+
+        extra['extras_require'] = {
+            # ...
+            'cassandra': extras('cassandra.txt'),
+        }
+
+3) Document the new feature in ``docs/includes/installation.txt``
+
+    You must add your feature to the list in the :ref:`bundles` section
+    of :file:`docs/includes/installation.txt`.
+
+    After you've made changes to this file you need to render
+    the distro :file:`README` file:
+
+    .. code-block:: bash
+
+        $ pip install -U requirements/pkgutils.txt
+        $ paver readme
+
+
+That's all that needs to be done, but remember that if your feature
+adds additional configuration options then these needs to be documented
+in ``docs/configuration.rst``.  Also all settings need to be added to the
+``celery/app/defaults.py`` module.
+
+Result backends require a separate section in the ``docs/configuration.rst``
+file.
 
 .. _contact_information:
 
@@ -654,6 +878,7 @@ Mher Movsisyan
 ~~~~~~~~~~~~~~
 
 :github: https://github.com/mher
+:twitter: http://twitter.com/#!/movsm
 
 Steeve Morin
 ~~~~~~~~~~~~
@@ -690,19 +915,29 @@ celery
 ------
 
 :git: https://github.com/celery/celery
-:CI: http://travis-ci.org/#!/ask/celery
+:CI: http://travis-ci.org/#!/celery/celery
 :PyPI: http://pypi.python.org/pypi/celery
 :docs: http://docs.celeryproject.org
 
 kombu
 -----
 
-Messaging framework.
+Messaging library.
 
 :git: https://github.com/celery/kombu
-:CI: http://travis-ci.org/#!/ask/kombu
+:CI: http://travis-ci.org/#!/celery/kombu
 :PyPI: http://pypi.python.org/pypi/kombu
 :docs: http://kombu.readthedocs.org
+
+amqp
+----
+
+Python AMQP 0.9.1 client.
+
+:git: https://github.com/celery/py-amqp
+:CI: http://travis-ci.org/#!/celery/py-amqp
+:PyPI: http://pypi.python.org/pypi/amqp
+:docs: http://amqp.readthedocs.org
 
 billiard
 --------
@@ -741,7 +976,7 @@ Django <-> Celery Integration.
 cl
 --
 
-Actor framework.
+Actor library.
 
 :git: https://github.com/celery/cl
 :PyPI: http://pypi.python.org/pypi/cl
@@ -808,15 +1043,21 @@ The version number must be updated two places:
 After you have changed these files you must render
 the :file:`README` files.  There is a script to convert sphinx syntax
 to generic reStructured Text syntax, and the paver task `readme`
-does this for you::
+does this for you:
+
+.. code-block:: bash
 
     $ paver readme
 
-Now commit the changes::
+Now commit the changes:
+
+.. code-block:: bash
 
     $ git commit -a -m "Bumps version to X.Y.Z"
 
-and make a new version tag::
+and make a new version tag:
+
+.. code-block:: bash
 
     $ git tag vX.Y.Z
     $ git push --tags
@@ -826,12 +1067,10 @@ Releasing
 
 Commands to make a new public stable release::
 
-    $ paver releaseok     # checks pep8, autodoc index and runs tests
-    $ paver removepyc  # Remove .pyc files.
-    $ git clean -xdn # Check that there's no left-over files in the repository.
-    $ python2.5 setup.py sdist upload # Upload package to PyPI
-    $ paver upload_pypi_docs
-    $ paver ghdocs # Build and upload documentation to Github.
+    $ paver releaseok  # checks pep8, autodoc index, runs tests and more
+    $ paver removepyc  # Remove .pyc files
+    $ git clean -xdn   # Check that there's no left-over files in the repo
+    $ python setup.py sdist upload  # Upload package to PyPI
 
 If this is a new release series then you also need to do the
 following:
@@ -845,20 +1084,3 @@ following:
     for series 2.4.
 
 * Also add the previous version under the "versions" tab.
-
-
-Updating bundles
-----------------
-
-First you need to make sure the bundle entrypoints have been installed,
-but either running `develop`, or `install`::
-
-    $ python setup.py develop
-
-Then make sure that you have your PyPI credentials stored in
-:file:`~/.pypirc`, and execute the command::
-
-    $ python setup.py upload_bundles
-
-If you broke something and need to update new versions of the bundles,
-then you can use ``upload_bundles_fix``.

@@ -10,20 +10,14 @@
 
     .. autoclass:: AMQP
 
-        .. attribute:: BrokerConnection
+        .. attribute:: Connection
 
             Broker connection class used.  Default is
-            :class:`kombu.connection.BrokerConnection`.
+            :class:`kombu.Connection`.
 
         .. attribute:: Consumer
 
-            The task consumer class used.
-            Default is :class:`kombu.compat.Consumer`.
-
-        .. attribute:: ConsumerSet
-
-            The class used to consume from multiple queues using the
-            same channel.
+            Base Consumer class used.  Default is :class:`kombu.compat.Consumer`.
 
         .. attribute:: queues
 
@@ -31,26 +25,22 @@
 
         .. automethod:: Queues
         .. automethod:: Router
-        .. automethod:: TaskConsumer
-        .. automethod:: TaskPublisher
+        .. autoattribute:: TaskConsumer
+        .. autoattribute:: TaskProducer
+        .. automethod:: flush_routes
 
-        .. automethod:: get_task_consumer
-        .. automethod:: get_default_queue
+        .. autoattribute:: default_queue
+        .. autoattribute:: default_exchange
+        .. autoattribute:: publisher_pool
+        .. autoattribute:: router
+        .. autoattribute:: routes
 
     Queues
     ------
 
     .. autoclass:: Queues
-
-        .. automethod:: add
-
-        .. automethod:: options
-
-        .. automethod:: format
-
-        .. automethod:: select_subset
-
-        .. automethod:: with_defaults
+        :members:
+        :undoc-members:
 
     TaskPublisher
     -------------

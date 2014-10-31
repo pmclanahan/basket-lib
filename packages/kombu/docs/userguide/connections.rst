@@ -10,24 +10,24 @@ Basics
 ======
 
 To send and receive messages you need a transport and a connection.
-There are several transports to choose from (amqplib, pika, redis, in-memory),
-and you can even create your own. The default transport is amqplib.
+There are several transports to choose from (amqp, librabbitmq, redis, in-memory, etc.),
+and you can even create your own. The default transport is amqp.
 
 Create a connection using the default transport::
 
-    >>> from kombu import BrokerConnection
-    >>> connection = BrokerConnection("amqp://guest:guest@localhost:5672//")
+    >>> from kombu import Connection
+    >>> connection = Connection('amqp://guest:guest@localhost:5672//')
 
 The connection will not be established yet, as the connection is established
 when needed. If you want to explicitly establish the connection
-you have to call the :meth:`~kombu.connection.BrokerConnection.connect`
+you have to call the :meth:`~kombu.Connection.connect`
 method::
 
     >>> connection.connect()
 
 You can also check whether the connection is connected::
 
-    >>> connection.connected()
+    >>> connection.connected
     True
 
 Connections must always be closed after use::
@@ -49,7 +49,7 @@ Of course, the connection can be used as a context, and you are
 encouraged to do so as it makes it harder to forget releasing open
 resources::
 
-    with BrokerConnection() as connection:
+    with Connection() as connection:
         # work with connection
 
 .. _connection-urls:
@@ -70,6 +70,9 @@ All of these are valid URLs::
     # Using Redis
     redis://localhost:6379/
 
+    # Using Redis over a Unix socket
+    redis+socket:///tmp/redis.sock
+
     # Using virtual host '/foo'
     amqp://localhost//foo
 
@@ -87,7 +90,7 @@ which is using the localhost host, default port, user name `guest`,
 password `guest` and virtual host "/". A connection without arguments
 is the same as::
 
-    >>> BrokerConnection("amqp://guest:guest@localhost:5672//")
+    >>> Connection('amqp://guest:guest@localhost:5672//')
 
 The default port is transport specific, for AMQP this is 5672.
 
@@ -100,7 +103,7 @@ the redis database number.
 Keyword arguments
 =================
 
-The :class:`BrokerConnection` class supports additional
+The :class:`~kombu.Connection` class supports additional
 keyword arguments, these are:
 
 :hostname: Default host name if not provided in the URL.
@@ -110,21 +113,34 @@ keyword arguments, these are:
 :port: Default port if not provided in the URL.
 :transport: Default transport if not provided in the URL.
   Can be a string specifying the path to the class. (e.g.
-  ``kombu.transport.pyamqplib.Transport``), or one of the aliases:
-  ``amqplib``, ``pika``, ``redis``, ``memory``, and so on.
+  ``kombu.transport.pyamqp:Transport``), or one of the aliases:
+  ``pyamqp``, ``librabbitmq``, ``redis``, ``memory``, and so on.
 
 :ssl: Use SSL to connect to the server. Default is ``False``.
   Only supported by the amqp transport.
 :insist: Insist on connecting to a server.
-  In a configuration with multiple load-sharing servers, the insist
-  option tells the server that the client is insisting on a connection
-  to the specified server.  Default is ``False``.
-  Only supported by the amqp and pika transports, and not by AMQP 0-9-1.
+  *No longer supported, relic from AMQP 0.8*
 :connect_timeout: Timeout in seconds for connecting to the
   server. May not be supported by the specified transport.
 :transport_options: A dict of additional connection arguments to
   pass to alternate kombu channel implementations.  Consult the transport
   documentation for available options.
+
+AMQP Transports
+===============
+
+There are 3 transports available for AMQP use.
+
+1. ``pyamqp`` uses the pure Python library ``amqp``, automatically
+   installed with Kombu.
+2. ``librabbitmq`` uses the high performance transport written in C.
+   This requires the ``librabbitmq`` Python package to be installed, which
+   automatically compiles the C library.
+3. ``amqp`` tries to use ``librabbitmq`` but falls back to ``pyamqp``.
+
+For the highest performance, you should install the ``librabbitmq`` package.
+To ensure librabbitmq is used, you can explicitly specify it in the
+transport URL, or use ``amqp`` to have the fallback.
 
 Transport Comparison
 ====================
@@ -132,21 +148,25 @@ Transport Comparison
 +---------------+----------+------------+------------+---------------+
 | **Client**    | **Type** | **Direct** | **Topic**  | **Fanout**    |
 +---------------+----------+------------+------------+---------------+
-| *amqplib*     | Native   | Yes        | Yes        | Yes           |
+| *amqp*        | Native   | Yes        | Yes        | Yes           |
 +---------------+----------+------------+------------+---------------+
-| *pika*        | Native   | Yes        | Yes        | Yes           |
+| *redis*       | Virtual  | Yes        | Yes        | Yes (PUB/SUB) |
 +---------------+----------+------------+------------+---------------+
-| *redis*       | Virtual  | Yes        | Yes [#f1]_ | Yes (PUB/SUB) |
+| *mongodb*     | Virtual  | Yes        | Yes        | Yes           |
 +---------------+----------+------------+------------+---------------+
 | *beanstalk*   | Virtual  | Yes        | Yes [#f1]_ | No            |
 +---------------+----------+------------+------------+---------------+
 | *SQS*         | Virtual  | Yes        | Yes [#f1]_ | Yes [#f2]_    |
 +---------------+----------+------------+------------+---------------+
-| *mongodb*     | Virtual  | Yes        | Yes [#f1]_ | No            |
-+---------------+----------+------------+------------+---------------+
 | *couchdb*     | Virtual  | Yes        | Yes [#f1]_ | No            |
 +---------------+----------+------------+------------+---------------+
+| *zookeeper*   | Virtual  | Yes        | Yes [#f1]_ | No            |
++---------------+----------+------------+------------+---------------+
 | *in-memory*   | Virtual  | Yes        | Yes [#f1]_ | No            |
++---------------+----------+------------+------------+---------------+
+| *django*      | Virtual  | Yes        | Yes [#f1]_ | No            |
++---------------+----------+------------+------------+---------------+
+| *sqlalchemy*  | Virtual  | Yes        | Yes [#f1]_ | No            |
 +---------------+----------+------------+------------+---------------+
 
 
@@ -154,4 +174,5 @@ Transport Comparison
          must be declared by all clients that needs them.
 
 .. [#f2] Fanout supported via storing routing tables in SimpleDB.
-         Can be disabled by setting the ``supports_fanout`` transport option.
+         Disabled by default, but can be enabled by using the
+         ``supports_fanout`` transport option.

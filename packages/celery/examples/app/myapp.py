@@ -2,7 +2,7 @@
 
 Usage:
 
-   (window1)$ python myapp.py -l info
+   (window1)$ python myapp.py worker -l info
 
    (window2)$ python
    >>> from myapp import add
@@ -10,21 +10,30 @@ Usage:
    32
 
 
-You can also specify the app to use with celeryd::
+You can also specify the app to use with the `celery` command,
+using the `-A` / `--app` option::
 
-    $ celeryd -l info --app=myapp.celery
+    $ celery -A myapp worker -l info
+
+With the `-A myproj` argument the program will search for an app
+instance in the module ``myproj``.  You can also specify an explicit
+name using the fully qualified form::
+
+    $ celery -A myapp:app worker -l info
 
 """
 from celery import Celery
 
+app = Celery(
+    'myapp',
+    broker='amqp://guest@localhost//',
+    # add result backend here if needed.
+    #backend='rpc'
+)
 
-celery = Celery("myapp")
-celery.conf.update(BROKER_URL="amqp://guest:guest@localhost:5672//")
-
-
-@celery.task
+@app.task()
 def add(x, y):
     return x + y
 
-if __name__ == "__main__":
-    celery.worker_main()
+if __name__ == '__main__':
+    app.start()

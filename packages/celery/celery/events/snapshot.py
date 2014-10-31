@@ -9,26 +9,27 @@
     implementation of this writing the snapshots to a database
     in :mod:`djcelery.snapshots` in the `django-celery` distribution.
 
-    :copyright: (c) 2009 - 2012 by Ask Solem.
-    :license: BSD, see LICENSE for more details.
-
 """
 from __future__ import absolute_import
 
-import atexit
-
 from kombu.utils.limits import TokenBucket
 
-from .. import platforms
-from ..app import app_or_default
-from ..utils import timer2, instantiate, LOG_LEVELS
-from ..utils.dispatch import Signal
-from ..utils.timeutils import rate
+from celery import platforms
+from celery.app import app_or_default
+from celery.utils.timer2 import Timer
+from celery.utils.dispatch import Signal
+from celery.utils.imports import instantiate
+from celery.utils.log import get_logger
+from celery.utils.timeutils import rate
+
+__all__ = ['Polaroid', 'evcam']
+
+logger = get_logger('celery.evcam')
 
 
 class Polaroid(object):
-    timer = timer2
-    shutter_signal = Signal(providing_args=("state", ))
+    timer = None
+    shutter_signal = Signal(providing_args=('state', ))
     cleanup_signal = Signal()
     clear_after = False
 
@@ -36,21 +37,20 @@ class Polaroid(object):
     _ctref = None
 
     def __init__(self, state, freq=1.0, maxrate=None,
-            cleanup_freq=3600.0, logger=None, timer=None, app=None):
+                 cleanup_freq=3600.0, timer=None, app=None):
         self.app = app_or_default(app)
         self.state = state
         self.freq = freq
         self.cleanup_freq = cleanup_freq
-        self.timer = timer or self.timer
-        self.logger = logger or \
-                self.app.log.get_default_logger(name="celery.cam")
+        self.timer = timer or self.timer or Timer()
+        self.logger = logger
         self.maxrate = maxrate and TokenBucket(rate(maxrate))
 
     def install(self):
-        self._tref = self.timer.apply_interval(self.freq * 1000.0,
-                                               self.capture)
-        self._ctref = self.timer.apply_interval(self.cleanup_freq * 1000.0,
-                                                self.cleanup)
+        self._tref = self.timer.call_repeatedly(self.freq, self.capture)
+        self._ctref = self.timer.call_repeatedly(
+            self.cleanup_freq, self.cleanup,
+        )
 
     def on_shutter(self, state):
         pass
@@ -59,13 +59,13 @@ class Polaroid(object):
         pass
 
     def cleanup(self):
-        self.logger.debug("Cleanup: Running...")
+        logger.debug('Cleanup: Running...')
         self.cleanup_signal.send(None)
         self.on_cleanup()
 
     def shutter(self):
         if self.maxrate is None or self.maxrate.can_consume():
-            self.logger.debug("Shutter: %s", self.state)
+            logger.debug('Shutter: %s', self.state)
             self.shutter_signal.send(self.state)
             self.on_shutter(self.state)
 
@@ -88,29 +88,22 @@ class Polaroid(object):
 
 
 def evcam(camera, freq=1.0, maxrate=None, loglevel=0,
-        logfile=None, pidfile=None, timer=None, app=None):
+          logfile=None, pidfile=None, timer=None, app=None):
     app = app_or_default(app)
 
     if pidfile:
-        pidlock = platforms.create_pidlock(pidfile).acquire()
-        atexit.register(pidlock.release)
+        platforms.create_pidlock(pidfile)
 
-    if not isinstance(loglevel, int):
-        loglevel = LOG_LEVELS[loglevel.upper()]
-    logger = app.log.setup_logger(loglevel=loglevel,
-                                  logfile=logfile,
-                                  name="celery.evcam")
+    app.log.setup_logging_subsystem(loglevel, logfile)
 
-    logger.info(
-        "-> evcam: Taking snapshots with %s (every %s secs.)\n" % (
-            camera, freq))
+    print('-> evcam: Taking snapshots with {0} (every {1} secs.)'.format(
+        camera, freq))
     state = app.events.State()
-    cam = instantiate(camera, state, app=app,
-                      freq=freq, maxrate=maxrate, logger=logger,
-                      timer=timer)
+    cam = instantiate(camera, state, app=app, freq=freq,
+                      maxrate=maxrate, timer=timer)
     cam.install()
-    conn = app.broker_connection()
-    recv = app.events.Receiver(conn, handlers={"*": state.event})
+    conn = app.connection()
+    recv = app.events.Receiver(conn, handlers={'*': state.event})
     try:
         try:
             recv.capture(limit=None)

@@ -1,12 +1,13 @@
-from celery.task import task
-from eventlet.green import urllib2
+import requests
+
+from celery import task
 
 
-@task
+@task()
 def urlopen(url):
-    print("Opening: %r" % (url, ))
+    print('Opening: {0}'.format(url))
     try:
-        body = urllib2.urlopen(url).read()
-    except Exception, exc:
-        print("URL %r gave error: %r" % (url, exc))
-    return len(body)
+        response = requests.get(url)
+    except Exception as exc:
+        print('URL {0} gave error: {1!r}'.format(url, exc))
+    return len(response.text)

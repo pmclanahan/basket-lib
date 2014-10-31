@@ -3,29 +3,31 @@
 from __future__ import absolute_import
 
 import weakref
-try:
-    set
-except NameError:
-    from sets import Set as set                 # Python 2.3 fallback
-
 from . import saferef
+
+from celery.five import range
+from celery.local import PromiseProxy, Proxy
+
+__all__ = ['Signal']
 
 WEAKREF_TYPES = (weakref.ReferenceType, saferef.BoundMethodWeakref)
 
 
-def _make_id(target):
-    if hasattr(target, 'im_func'):
-        return (id(target.im_self), id(target.im_func))
+def _make_id(target):  # pragma: no cover
+    if isinstance(target, Proxy):
+        target = target._get_current_object()
+    if hasattr(target, '__func__'):
+        return (id(target.__self__), id(target.__func__))
     return id(target)
 
 
-class Signal(object):
+class Signal(object):  # pragma: no cover
     """Base class for all signals
 
 
     .. attribute:: receivers
         Internal attribute, holds a dictionary of
-        `{receriverkey (id): weakref(receiver)}` mappings.
+        `{receiverkey (id): weakref(receiver)}` mappings.
 
     """
 
@@ -40,6 +42,12 @@ class Signal(object):
         if providing_args is None:
             providing_args = []
         self.providing_args = set(providing_args)
+
+    def _connect_proxy(self, fun, sender, weak, dispatch_uid):
+        return self.connect(
+            fun, sender=sender._get_current_object(),
+            weak=weak, dispatch_uid=dispatch_uid,
+        )
 
     def connect(self, *args, **kwargs):
         """Connect receiver to sender for signal.
@@ -76,14 +84,21 @@ class Signal(object):
             def _connect_signal(fun):
                 receiver = fun
 
+                if isinstance(sender, PromiseProxy):
+                    sender.__then__(
+                        self._connect_proxy, fun, sender, weak, dispatch_uid,
+                    )
+                    return fun
+
                 if dispatch_uid:
                     lookup_key = (dispatch_uid, _make_id(sender))
                 else:
                     lookup_key = (_make_id(receiver), _make_id(sender))
 
                 if weak:
-                    receiver = saferef.safe_ref(receiver,
-                                            on_delete=self._remove_receiver)
+                    receiver = saferef.safe_ref(
+                        receiver, on_delete=self._remove_receiver,
+                    )
 
                 for r_key, _ in self.receivers:
                     if r_key == lookup_key:
@@ -100,7 +115,7 @@ class Signal(object):
         return _handle_options(*args, **kwargs)
 
     def disconnect(self, receiver=None, sender=None, weak=True,
-            dispatch_uid=None):
+                   dispatch_uid=None):
         """Disconnect receiver from sender for signal.
 
         If weak references are used, disconnect need not be called. The
@@ -122,7 +137,7 @@ class Signal(object):
         else:
             lookup_key = (_make_id(receiver), _make_id(sender))
 
-        for index in xrange(len(self.receivers)):
+        for index in range(len(self.receivers)):
             (r_key, _) = self.receivers[index]
             if r_key == lookup_key:
                 del self.receivers[index]
@@ -140,7 +155,7 @@ class Signal(object):
 
         :keyword \*\*named: Named arguments which will be passed to receivers.
 
-        :returns: a list of tuple pairs: `[(receiver, response), ... ]`.
+        :returns: a list of tuple pairs: `[(receiver, response), … ]`.
 
         """
         responses = []
@@ -163,7 +178,7 @@ class Signal(object):
             These arguments must be a subset of the argument names defined in
             :attr:`providing_args`.
 
-        :returns: a list of tuple pairs: `[(receiver, response), ... ]`.
+        :returns: a list of tuple pairs: `[(receiver, response), … ]`.
 
         :raises DispatcherKeyError:
 
@@ -177,11 +192,11 @@ class Signal(object):
             return responses
 
         # Call each receiver with whatever arguments it can accept.
-        # Return a list of tuple pairs [(receiver, response), ... ].
+        # Return a list of tuple pairs [(receiver, response), … ].
         for receiver in self._live_receivers(_make_id(sender)):
             try:
                 response = receiver(signal=self, sender=sender, **named)
-            except Exception, err:
+            except Exception as err:
                 responses.append((receiver, err))
             else:
                 responses.append((receiver, response))
@@ -221,6 +236,6 @@ class Signal(object):
                     del self.receivers[idx]
 
     def __repr__(self):
-        return '<Signal: %s>' % (self.__class__.__name__, )
+        return '<Signal: {0}>'.format(type(self).__name__)
 
     __str__ = __repr__

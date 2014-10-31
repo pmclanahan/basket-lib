@@ -16,7 +16,7 @@ The API>RCP Precedence Rule
 - The API is more important than Readability
 - Readability is more important than Convention
 - Convention is more important than Performance
-    - ...unless the code is a proven hotspot.
+    - …unless the code is a proven hotspot.
 
 More important than anything else is the end-user API.
 Conventions must step aside, and any suffering is always alleviated
@@ -64,7 +64,7 @@ Naming
         Sometimes it makes sense to have a class mask as a function,
         and there is precedence for this in the stdlib (e.g.
         :class:`~contextlib.contextmanager`).  Celery examples include
-        :class:`~celery.task.sets.subtask`, :class:`~celery.task.chords.chord`,
+        :class:`~celery.subtask`, :class:`~celery.chord`,
         ``inspect``, :class:`~kombu.utils.functional.promise` and more..
 
 - Factory functions and methods must be `CamelCase` (excluding verbs):
@@ -91,7 +91,7 @@ as this means that they can be set by either instantiation or inheritance.
 
     class Producer(object):
         active = True
-        serializer = "json"
+        serializer = 'json'
 
         def __init__(self, serializer=None):
             self.serializer = serializer or self.serializer
@@ -104,13 +104,13 @@ A subclass can change the default value:
 .. code-block:: python
 
     TaskProducer(Producer):
-        serializer = "pickle"
+        serializer = 'pickle'
 
 and the value can be set at instantiation:
 
 .. code-block:: python
 
-    >>> producer = TaskProducer(serializer="msgpack")
+    >>> producer = TaskProducer(serializer='msgpack')
 
 Exceptions
 ~~~~~~~~~~
@@ -179,14 +179,14 @@ can't co-exist in the same process space, this later posed a problem
 for using Celery with frameworks that doesn't have this limitation.
 
 Therefore the app concept was introduced.  When using apps you use 'celery'
-objects instead of importing things from celery submodules, this sadly
-also means that Celery essentially has two API's.
+objects instead of importing things from celery submodules, this
+(unfortunately) also means that Celery essentially has two API's.
 
 Here's an example using Celery in single-mode:
 
 .. code-block:: python
 
-    from celery.task import task
+    from celery import task
     from celery.task.control import inspect
 
     from .models import CeleryStats
@@ -205,7 +205,7 @@ and here's the same using Celery app objects:
     from .celery import celery
     from .models import CeleryStats
 
-    @celery.task
+    @app.task
     def write_stats_to_db():
         stats = celery.control.inspect().stats(timeout=1)
         for node_name, reply in stats:
@@ -219,8 +219,7 @@ from a module in the project, this module could look something like this:
 
     from celery import Celery
 
-    celery = Celery()
-    celery.config_from_object(BROKER_URL="amqp://")
+    app = Celery(broker='amqp://')
 
 
 Module Overview
@@ -259,15 +258,17 @@ Module Overview
 
 - celery.apps
 
-    Major user applications: ``celeryd``, and ``celerybeat``
+    Major user applications: worker and beat.
+    The command-line wrappers for these are in celery.bin (see below)
+
 - celery.bin
 
-    Command line applications.
+    Command-line applications.
     setup.py creates setuptools entrypoints for these.
 
 - celery.concurrency
 
-    Execution pool implementations (processes, eventlet, gevent, threads).
+    Execution pool implementations (prefork, eventlet, gevent, threads).
 
 - celery.db
 

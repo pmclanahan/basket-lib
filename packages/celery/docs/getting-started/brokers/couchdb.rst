@@ -4,6 +4,13 @@
  Using CouchDB
 ===============
 
+.. admonition:: Experimental Status
+
+    The CouchDB transport is in need of improvements in many areas and there
+    are several open bugs.  Unfortunately we don't have the resources or funds
+    required to improve the situation, so we're looking for contributors
+    and partners willing to help.
+
 .. _broker-couchdb-installation:
 
 Installation
@@ -11,14 +18,11 @@ Installation
 
 For the CouchDB support you have to install additional dependencies.
 You can install both Celery and these dependencies in one go using
-either the `celery-with-couchdb`_, or the `django-celery-with-couchdb` bundles::
+the ``celery[couchdb]`` :ref:`bundle <bundles>`:
 
-    $ pip install -U celery-with-couchdb
+.. code-block:: bash
 
-.. _`celery-with-couchdb`:
-    http://pypi.python.org/pypi/celery-with-couchdb
-.. _`django-celery-with-couchdb`:
-    http://pypi.python.org/pypi/django-celery-with-couchdb
+    $ pip install -U celery[couchdb]
 
 .. _broker-couchdb-configuration:
 
@@ -28,7 +32,7 @@ Configuration
 Configuration is easy, set the transport, and configure the location of
 your CouchDB database::
 
-    BROKER_URL = "couchdb://localhost:5984/database_name"
+    BROKER_URL = 'couchdb://localhost:5984/database_name'
 
 Where the URL is in the format of::
 
@@ -50,6 +54,7 @@ Storing task state and results in CouchDB is currently **not supported**.
 Limitations
 ===========
 
-The Beanstalk message transport does not currently support:
+The CouchDB message transport does not currently support:
 
-    * Remote control commands (celeryctl, broadcast)
+    * Remote control commands (:program:`celery inspect`,
+      :program:`celery control`, broadcast)

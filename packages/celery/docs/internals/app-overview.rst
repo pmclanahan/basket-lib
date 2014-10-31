@@ -16,16 +16,16 @@ Examples
 Creating a Celery instance::
 
     >>> from celery import Celery
-    >>> celery = Celery()
-    >>> celery.config_from_object("celeryconfig")
-    >>> celery.config_from_envvar("CELERY_CONFIG_MODULE")
+    >>> app = Celery()
+    >>> app.config_from_object("celeryconfig")
+    >>> #app.config_from_envvar("CELERY_CONFIG_MODULE")
 
 
 Creating tasks:
 
 .. code-block:: python
 
-    @celery.task()
+    @app.task
     def add(x, y):
         return x + y
 
@@ -39,11 +39,11 @@ Creating custom Task subclasses:
     class DebugTask(Task):
         abstract = True
 
-        def on_failure(self, \*args, \*\*kwargs):
+        def on_failure(self, *args, **kwargs):
             import pdb
             pdb.set_trace()
 
-    @celery.task(base=DebugTask)
+    @app.task(base=DebugTask)
     def add(x, y):
         return x + y
 
@@ -222,7 +222,7 @@ App Dependency Tree
 * {app.AsyncResult}
     * celery.result.BaseAsyncResult / celery.result.AsyncResult
 
-* celery.bin.celeryd.WorkerCommand
+* celery.bin.worker.WorkerCommand
     * celery.apps.worker.Worker
         * celery.worker.WorkerController
             * celery.worker.consumer.Consumer
@@ -235,7 +235,7 @@ App Dependency Tree
             * celery.worker.controllers.Mediator
             * celery.beat.EmbeddedService
 
-* celery.bin.celeryev.run_celeryev
+* celery.bin.events.EvCommand
     * celery.events.snapshot.evcam
         * celery.events.snapshot.Polaroid
         * celery.events.EventReceiver
@@ -245,12 +245,9 @@ App Dependency Tree
     * celery.events.dumper
         * celery.events.EventReceiver
 
-* celery.bin.celeryctl.celeryctl
-    * celery.bin.celeryctl.Command
+* celery.bin.amqp.AMQPAdmin
 
-* celery.bin.caqmadm.AMQPAdmin
-
-* celery.bin.celerybeat.BeatCommand
+* celery.bin.beat.BeatCommand
     * celery.apps.beat.Beat
         * celery.beat.Service
             * celery.beat.Scheduler

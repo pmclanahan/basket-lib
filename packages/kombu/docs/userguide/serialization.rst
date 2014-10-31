@@ -15,6 +15,17 @@ Python data structures like dictionaries and lists works.
 and if needed you can register any custom serialization scheme you
 want to use.
 
+
+By default Kombu will only load JSON messages, so if you want
+to use other serialization format you must explicitly enable
+them in your consumer by using the ``accept`` argument:
+
+.. code-block:: python
+
+    Consumer(conn, [queue], accept=['json', 'pickle', 'msgpack'])
+
+The accept argument can also include MIME-types.
+
 .. _`JSON`: http://www.json.org/
 .. _`YAML`: http://yaml.org/
 .. _`msgpack`: http://msgpack.sourceforge.net/
@@ -43,6 +54,22 @@ Each option has its advantages and disadvantages.
     the support of all built-in Python data types (except class instances),
     smaller messages when sending binary files, and a slight speedup
     over `JSON` processing.
+
+    .. admonition:: Pickle and Security
+
+        The pickle format is very convenient as it can serialize
+        and deserialize almost any object, but this is also a concern
+        for security.
+
+        Carefully crafted pickle payloads can do almost anything
+        a regular Python program can do, so if you let your consumer
+        automatically decode pickled objects you must make sure
+        to limit access to the broker so that untrusted
+        parties do not have the ability to send messages!
+
+    By default Kombu uses pickle protocol 2, but this can be changed
+    using the :envvar:`PICKLE_PROTOCOL` environment variable or by changing
+    the global :data:`kombu.serialization.pickle_protocol` flag.
 
 `yaml` -- YAML has many of the same characteristics as `json`,
     except that it natively supports more data types (including dates,
@@ -93,3 +120,65 @@ for the raw data::
 
 The `Message` object returned by the `Consumer` class will have a
 `content_type` and `content_encoding` attribute.
+
+.. _serialization-entrypoints:
+
+Creating extensions using Setuptools entry-points
+=================================================
+
+A package can also register new serializers using Setuptools
+entry-points.
+
+The entry-point must provide the name of the serializer along
+with the path to a tuple providing the rest of the args:
+``decoder_function, encoder_function, content_type, content_encoding``.
+
+An example entrypoint could be:
+
+.. code-block:: python
+
+    from setuptools import setup
+
+    setup(
+        entry_points={
+            'kombu.serializers': [
+                'my_serializer = my_module.serializer:register_args'
+            ]
+        }
+    )
+
+
+Then the module ``my_module.serializer`` would look like:
+
+.. code-block:: python
+
+    register_args = (my_decoder, my_encoder, 'application/x-mimetype', 'utf-8')
+
+
+When this package is installed the new 'my_serializer' serializer will be
+supported by Kombu.
+
+
+.. admonition:: Buffer Objects
+
+    The decoder function of custom serializer must support both strings
+    and Python's old-style buffer objects.
+
+    Python pickle and json modules usually don't do this via its ``loads``
+    function, but you can easily add support by making a wrapper around the
+    ``load`` function that takes file objects instead of strings.
+
+    Here's an example wrapping :func:`pickle.loads` in such a way:
+
+    .. code-block:: python
+
+        import pickle
+        from kombu.serialization import BytesIO, register
+
+
+        def loads(s):
+            return pickle.load(BytesIO(s))
+
+        register('my_pickle', pickle.dumps, loads,
+                content_type='application/x-pickle2',
+                content_encoding='binary')
