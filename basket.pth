@@ -1,13 +1,9 @@
 lib/python
-packages/amqplib
 packages/anyjson
-packages/celery
 packages/coverage
-packages/django-celery
 packages/django-jsonfield
 packages/django-picklefield/src
 packages/importlib
-packages/kombu
 packages/ordereddict
 packages/python-dateutil
 packages/python-ldap
@@ -32,3 +28,8 @@ src/raven
 src/flanker
 src/expiringdict
 src/django-sslify-admin
+src/celery
+src/django-celery
+src/kombu
+src/billiard
+src/py-amqp

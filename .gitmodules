@@ -40,3 +40,18 @@
 [submodule "src/django-sslify-admin"]
 	path = src/django-sslify-admin
 	url = git://github.com/return1/django-sslify-admin.git
+[submodule "src/celery"]
+	path = src/celery
+	url = git://github.com/celery/celery.git
+[submodule "src/kombu"]
+	path = src/kombu
+	url = git://github.com/celery/kombu.git
+[submodule "src/py-amqp"]
+	path = src/py-amqp
+	url = git://github.com/celery/py-amqp.git
+[submodule "src/billiard"]
+	path = src/billiard
+	url = git://github.com/celery/billiard.git
+[submodule "src/django-celery"]
+	path = src/django-celery
+	url = git://github.com/celery/django-celery.git
